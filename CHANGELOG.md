@@ -5,6 +5,11 @@
 - No changes
 
 
+## [v0.1.6] - 2026-06-05
+
+- Relocate the big-integer ambient declarations (`u128`/`i128`/`u256`/`i256`) into `std/assembly/toilscript.d.ts` alongside `@main`, and drop the now-unused compiled `std/assembly/toilscript.ts`. No API change — the types resolve exactly as before.
+
+
 ## [v0.1.5] - 2026-06-05
 
 - Add native `u128`, `i128` and `u256` (plus `i256`) integer types: an audited 128/256-bit integer implementation lives in `std/assembly/bignum` (Apache-2.0), promoted to global types via a top-level library entry, with ambient declarations in `std/assembly/index.d.ts`. Usable with no import, like the built-in integer types.
