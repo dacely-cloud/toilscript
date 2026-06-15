@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.1.24] - 2026-06-15
+
+- fix(types): declare the @cache / @auth / @user / @ratelimit decorators in toilscript.d.ts so editors stop reporting "Cannot find name" on them
+
+
 ## [v0.1.23] - 2026-06-15
 
 - feat(parser): @ratelimit(strategy, limit, window) route decorator ([#8](https://github.com/dacely-cloud/toilscript/pull/8))
