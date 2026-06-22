@@ -586,6 +586,10 @@ class RouteInfo {
   path: string = "";
 }
 
+const TOILDB_ROUTE_KIND_MAX_SECTION_BYTES: i32 = 128 * 1024;
+const TOILDB_ROUTE_KIND_MAX_ROUTES: i32 = 2048;
+const TOILDB_ROUTE_KIND_MAX_PATTERN_BYTES: i32 = 2048;
+
 /** Build the `toildb.route_kinds` section bytes, or `null` when no route needs
  *  an extra runtime DB-policy clamp. The edge already derives the default kind
  *  from the trusted HTTP method. This section only carries the stricter source
@@ -623,11 +627,45 @@ export function buildToilDbRouteKinds(program: Program): Uint8Array | null {
         if (routeDeco == null) continue;
         let info = routeInfoOf(routeDeco);
         if (info == null || isSafeMethod(info.method)) continue;
-        if (explicitRequestKind(method.decorators) != 0) continue;
+        let explicitKind = explicitRequestKind(method.decorators);
+        if (explicitKind > 1) {
+          program.error(
+            DiagnosticCode.User_defined_0,
+            method.name.range,
+            "HTTP route methods may only use @query or @action ToilDB function kinds"
+          );
+          return null;
+        }
+        if (explicitKind != 0) continue;
+        let fullPath = joinRoutePath(prefix, info.path);
+        if (routes.length >= TOILDB_ROUTE_KIND_MAX_ROUTES) {
+          program.error(
+            DiagnosticCode.User_defined_0,
+            method.name.range,
+            "too many explicit @query HTTP routes for toildb.route_kinds"
+          );
+          return null;
+        }
+        if (!validRoutePattern(fullPath)) {
+          program.error(
+            DiagnosticCode.User_defined_0,
+            method.name.range,
+            "route pattern for toildb.route_kinds must be a non-empty ASCII path starting with '/'"
+          );
+          return null;
+        }
+        if (fullPath.length > TOILDB_ROUTE_KIND_MAX_PATTERN_BYTES) {
+          program.error(
+            DiagnosticCode.User_defined_0,
+            method.name.range,
+            "route pattern for toildb.route_kinds is too large"
+          );
+          return null;
+        }
         let entry = new RouteKindEntry();
         entry.method = info.method;
         entry.kind = 0; // FunctionKind::Query
-        entry.path = joinRoutePath(prefix, info.path);
+        entry.path = fullPath;
         routes.push(entry);
       }
     }
@@ -641,7 +679,16 @@ export function buildToilDbRouteKinds(program: Program): Uint8Array | null {
     w.u8(routes[i].kind);
     w.str(routes[i].path);
   }
-  return w.toBytes();
+  let out = w.toBytes();
+  if (out.length > TOILDB_ROUTE_KIND_MAX_SECTION_BYTES) {
+    program.error(
+      DiagnosticCode.User_defined_0,
+      null,
+      "toildb.route_kinds section is too large"
+    );
+    return null;
+  }
+  return out;
 }
 
 function explicitRequestKind(decorators: DecoratorNode[] | null): i32 {
@@ -650,6 +697,9 @@ function explicitRequestKind(decorators: DecoratorNode[] | null): i32 {
     let dk = decorators[i].decoratorKind;
     if (dk == DecoratorKind.Query) return 0;
     if (dk == DecoratorKind.Action) return 1;
+    if (dk == DecoratorKind.Job || dk == DecoratorKind.Derive || dk == DecoratorKind.Admin) {
+      return 2;
+    }
   }
   return -1;
 }
@@ -745,6 +795,15 @@ function joinRoutePath(prefix: string, routePath: string): string {
   if (r.length > 1) r = r.replace(/\/+$/, "");
   let full = prefix + r;
   return full.length == 0 ? "/" : full;
+}
+
+function validRoutePattern(path: string): bool {
+  if (path.length == 0 || !path.startsWith("/")) return false;
+  for (let i = 0, k = path.length; i < k; ++i) {
+    let c = path.charCodeAt(i);
+    if (c < 0x20 || c > 0x7e) return false;
+  }
+  return true;
 }
 
 // ===========================================================================
