@@ -280,12 +280,16 @@ function isDbReadOp(op: string): bool {
     op == "MembershipContains" || op == "MembershipList" || op == "CapacityAvailable";
 }
 
+function isDbScanOp(op: string): bool {
+  return op == "Latest" || op == "MembershipList";
+}
+
 /** Static mirror of the edge `allowed_ops::kind_allows` (spec 6). */
 function dbKindAllows(kind: i32, op: string): bool {
   switch (kind) {
-    case DecoratorKind.Query: return isDbReadOp(op);
+    case DecoratorKind.Query: return isDbReadOp(op) && !isDbScanOp(op);
     case DecoratorKind.Action:
-      return isDbReadOp(op) || op == "Create" || op == "Patch" || op == "Delete" ||
+      return (isDbReadOp(op) && !isDbScanOp(op)) || op == "Create" || op == "Patch" || op == "Delete" ||
         op == "GetDelete" || op == "Append" || op == "CounterAdd" || op == "UniqueClaim" ||
         op == "UniqueRelease" || op == "MembershipAdd" || op == "MembershipRemove" ||
         op == "CapacityReserve" || op == "CapacityConfirm" || op == "CapacityCancel";
@@ -314,8 +318,8 @@ function dbKindName(kind: i32): string {
 
 function dbKindReason(kind: i32): string {
   switch (kind) {
-    case DecoratorKind.Query: return "a query is read-only";
-    case DecoratorKind.Action: return "an action cannot publish views";
+    case DecoratorKind.Query: return "a query is read-only and cannot scan";
+    case DecoratorKind.Action: return "an action cannot scan or publish views";
     case DecoratorKind.Derive: return "a derive may only read, publish views, append events, or add to counters";
     case DecoratorKind.Admin: return "an admin has no request-path data access";
     case DecoratorKind.Migrate: return "a migration is a pure value transform and cannot access the database";
