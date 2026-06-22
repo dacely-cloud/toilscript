@@ -165,5 +165,60 @@ if (
   fail(`wrong route kind entry: ${JSON.stringify(routes[0])}`);
 }
 
+function compileSource(source) {
+  writeFileSync(app, source);
+  return spawnSync(
+    "node",
+    [join(root, "bin", "toilscript.js"), app, "-o", out, "--runtime", "stub"],
+    { cwd: tmp, encoding: "utf8" },
+  );
+}
+
+function expectCompileFailure(source, expected) {
+  const result = compileSource(source);
+  if (result.status === 0)
+    fail(`expected compile failure containing '${expected}'`);
+  const text = `${result.stdout}\n${result.stderr}`;
+  if (!text.includes(expected)) {
+    fail(
+      `expected diagnostic '${expected}'\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  }
+}
+
+expectCompileFailure(
+  `
+@rest("api")
+class BadKind {
+  @job
+  @post("/job")
+  run(): void {}
+}
+`,
+  "HTTP route methods may only use @query or @action",
+);
+
+expectCompileFailure(
+  `
+@rest("api")
+class NonAscii {
+  @query
+  @post("/snowman-☃")
+  search(): void {}
+}
+`,
+  "route pattern for toildb.route_kinds must be a non-empty ASCII path starting with '/'",
+);
+
+let manyRoutes = '@rest("api")\nclass TooMany {\n';
+for (let i = 0; i < 2049; i++) {
+  manyRoutes += `  @query\n  @post("/r${i}")\n  r${i}(): void {}\n`;
+}
+manyRoutes += "}\n";
+expectCompileFailure(
+  manyRoutes,
+  "too many explicit @query HTTP routes for toildb.route_kinds",
+);
+
 rmSync(tmp, { recursive: true, force: true });
 console.log("route-kind metadata test: ALL PASS");
