@@ -118,19 +118,22 @@ function decodeCatalog(p) {
     const u8 = () => p[pos++];
     const str = () => { const n = u32(); const s = p.toString("latin1", pos, pos + n); pos += n; return s; };
     const colls = [];
-    u16(); const ndb = u16();
+    const version = u16();
+    if (version !== 2) fail(`expected toildb.catalog version 2, got ${version}`);
+    const ndb = u16();
     for (let d = 0; d < ndb; d++) {
         str(); const nc = u16();
         for (let c = 0; c < nc; c++) {
             const name = str(), family = u8(), keyType = str(), valueType = str();
             const valueDataId = u32(), schemaVersion = u32(), generation = u32();
-            u8(); u8();
+            const replication = u8(), placement = u8();
+            const fillMaxWaitMs = u32(), fillAllowStale = u8();
             const nFields = u16();
             for (let f = 0; f < nFields; f++) { str(); str(); u8(); }
             const nMig = u16();
             const migratableFrom = [];
             for (let mi = 0; mi < nMig; mi++) migratableFrom.push(u32());
-            colls.push({ name, family, keyType, valueType, valueDataId, schemaVersion, generation, migratableFrom });
+            colls.push({ name, family, keyType, valueType, valueDataId, schemaVersion, generation, replication, placement, fillMaxWaitMs, fillAllowStale, migratableFrom });
         }
     }
     return colls;

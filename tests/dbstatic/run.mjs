@@ -74,7 +74,8 @@ function decodeCatalog(p) {
     const u8 = () => p[pos++];
     const str = () => { const n = u32(); const s = p.toString("latin1", pos, pos + n); pos += n; return s; };
     const colls = [];
-    u16(); // version
+    const version = u16();
+    if (version !== 2) fail(`expected toildb.catalog version 2, got ${version}`);
     const ndb = u16();
     for (let d = 0; d < ndb; d++) {
         str(); // db name
@@ -82,7 +83,8 @@ function decodeCatalog(p) {
         for (let c = 0; c < nc; c++) {
             const name = str(), family = u8(), keyType = str(), valueType = str();
             const valueDataId = u32(), schemaVersion = u32(), generation = u32();
-            u8(); u8(); // replication, placement
+            const replication = u8(), placement = u8();
+            const fillMaxWaitMs = u32(), fillAllowStale = u8();
             const nFields = u16();
             const fields = [];
             for (let f = 0; f < nFields; f++) {
@@ -91,7 +93,7 @@ function decodeCatalog(p) {
             const nMig = u16();
             const migratableFrom = [];
             for (let mi = 0; mi < nMig; mi++) migratableFrom.push(u32());
-            colls.push({ name, family, keyType, valueType, valueDataId, schemaVersion, generation, fields, migratableFrom });
+            colls.push({ name, family, keyType, valueType, valueDataId, schemaVersion, generation, replication, placement, fillMaxWaitMs, fillAllowStale, fields, migratableFrom });
         }
     }
     return colls;
@@ -125,8 +127,12 @@ if (expected !== 4276894199) fail(`layoutHash drifted from the pinned cross-repo
 if (items.schemaVersion !== expected) fail(`items.schema_version ${items.schemaVersion} != layoutHash ${expected}`);
 if (items.schemaVersion === fnv1a("Item")) fail("schema_version is still the value-NAME hash, not the field LAYOUT hash");
 if (items.valueDataId !== fnv1a("Item")) fail("value_data_id must remain the value-name hash");
+if (items.fillMaxWaitMs !== 7 || items.fillAllowStale !== 0)
+    fail(`items fill policy wrong: wait=${items.fillMaxWaitMs} stale=${items.fillAllowStale}`);
 // items and legacy share the value type Item, so they share a schema_version.
 if (items.schemaVersion !== legacy.schemaVersion) fail("same value type must yield the same schema_version");
+if (legacy.fillMaxWaitMs !== 50 || legacy.fillAllowStale !== 1)
+    fail(`legacy fill policy should default: wait=${legacy.fillMaxWaitMs} stale=${legacy.fillAllowStale}`);
 // the field LAYOUT is emitted too (so the deploy gate can compare old vs new).
 // Item = { name: string }.
 if (items.fields.length !== 1) fail(`items should emit 1 field, got ${items.fields.length}`);

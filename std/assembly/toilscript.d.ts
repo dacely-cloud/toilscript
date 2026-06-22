@@ -187,6 +187,13 @@ declare class StreamChannelMessage {
  *  lazily-resolved collection handle (`App.users.get(...)`). */
 declare function database(target: Function): void;
 
+declare interface CollectionOptions {
+  fillMaxWaitMs?: i32;
+  maxWaitMs?: i32;
+  fillStale?: string;
+  stale?: string;
+}
+
 /** Declares a `@database` field as a collection - a `Documents`/`View`/`Unique`/
  *  `Counter`/`Events`/`Membership`/`Capacity` handle. Prefer the `static` form,
  *  `@collection static users: Documents<UserId, User>` (no `!` - a definite
@@ -196,6 +203,7 @@ declare function database(target: Function): void;
  *  still works but needs the toilscript TS plugin to type the static `App.users`
  *  access. */
 declare function collection(target: Object, propertyKey: string | symbol): void;
+declare function collection(options: CollectionOptions): (target: Object, propertyKey: string | symbol) => void;
 
 /** ToilDB function kinds (spec 6) - the data ops a function may issue. `@query`
  *  is read-only; `@action` adds bounded writes/claims; `@derive` publishes
