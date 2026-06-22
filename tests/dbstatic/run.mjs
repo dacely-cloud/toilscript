@@ -4,7 +4,7 @@
 // every collection (the demote-to-instance step must not hide it). Compile-only:
 // the `@database` getters import the `__toildbResolve` host function, so the
 // module is not instantiated here.
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,43 @@ const compile = spawnSync(
     { stdio: "inherit" },
 );
 if (compile.status !== 0) fail("COMPILE FAILED");
+
+const badScan = join(tmp, "query-scan.ts");
+writeFileSync(badScan, `
+@data
+class Key {
+  id: string = "";
+  constructor(id: string = "") {
+    this.id = id;
+  }
+}
+
+@data
+class Item {
+  name: string = "";
+}
+
+@database
+class DB {
+  @collection static feed: Events<Key, Item>;
+}
+
+@query
+export function bad(): void {
+  const k = new Key("a");
+  DB.feed.latest(k, 1);
+}
+`);
+const badCompile = spawnSync(
+    "node",
+    [join(root, "bin", "toilscript.js"), badScan, "-o", join(tmp, "query-scan.wasm"), "--runtime", "stub"],
+    { encoding: "utf8" },
+);
+if (badCompile.status === 0) fail("@query scan COMPILE unexpectedly succeeded");
+const badOutput = `${badCompile.stdout ?? ""}${badCompile.stderr ?? ""}`;
+if (!badOutput.includes("may not call '.latest'") || !badOutput.includes("cannot scan")) {
+    fail(`@query scan failed with unexpected diagnostic: ${badOutput}`);
+}
 
 // The catalog records each `@collection` from the AST; the demoted static fields
 // must still be there with the right names, alongside the legacy instance one.
