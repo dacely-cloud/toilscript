@@ -3,17 +3,18 @@
 // For every `@database` class, the compiler records each `@collection` field's
 // family (from the handle type, `Documents`/`View`/...), key/value type names,
 // value data id (FNV-1a of the value class), schema version, generation, and
-// replication/placement policy. The host (`toildb::decode_catalog_section`)
+// replication/placement/fill policy. The host (`toildb::decode_catalog_section`)
 // decodes this once at module load to build the per-tenant collection catalog
 // with the CORRECT family + schema, instead of lazily defaulting to `record`.
 //
 // Wire format (little-endian; see toildb/ABI.md):
-//   u16 version(=1), u16 n_databases
+//   u16 version(=2), u16 n_databases
 //     per db: u32 name_len,name, u16 n_collections
 //       per coll: u32 name_len,name, u8 family,
 //                 u32 key_len,key, u32 value_len,value,
 //                 u32 value_data_id, u32 schema_version, u32 generation,
 //                 u8 replication, u8 placement,
+//                 u32 fill_max_wait_ms, u8 fill_allow_stale,
 //                 u16 n_fields, per field: u32 name_len,name u32 type_len,type u8 is_array,
 //                 u16 n_migrations, per migration: u32 old_schema_version
 
@@ -38,6 +39,10 @@ import {
   StringLiteralExpression,
   TypeNode
 } from "./ast";
+
+const TOILDB_CATALOG_VERSION: i32 = 2;
+const TOILDB_CATALOG_DEFAULT_FILL_WAIT_MS: u32 = 50;
+const TOILDB_CATALOG_MAX_FILL_WAIT_MS: f64 = 60_000.0;
 
 /** FNV-1a 32-bit hash, matching `dataTypeId` in the parser. */
 export function fnv1a(name: string): u32 {
@@ -342,6 +347,8 @@ class CollEntry {
   family: i32 = 0;
   keyType: string = "";
   valueType: string = "";
+  fillMaxWaitMs: u32 = TOILDB_CATALOG_DEFAULT_FILL_WAIT_MS;
+  fillAllowStale: bool = true;
 }
 
 class DbEntry {
@@ -458,7 +465,8 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
         let member = members[m];
         if (member.kind != NodeKind.FieldDeclaration) continue;
         let field = <FieldDeclaration>member;
-        if (!hasDeco(field.decorators, DecoratorKind.Collection)) continue;
+        let collectionDeco = decoOf(field.decorators, DecoratorKind.Collection);
+        if (collectionDeco == null) continue;
         let typeNode = field.type;
         if (typeNode == null || !(typeNode instanceof NamedTypeNode)) continue;
         let named = <NamedTypeNode>typeNode;
@@ -477,6 +485,38 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
           entry.keyType = namedArg(named, 0);
           entry.valueType = namedArg(named, 1);
         }
+        let opts = objectArg(collectionDeco);
+        if (opts != null) {
+          let fillMaxWaitMs = intField(opts, "fillMaxWaitMs");
+          if (fillMaxWaitMs < 0.0) fillMaxWaitMs = intField(opts, "maxWaitMs");
+          if (fillMaxWaitMs >= 0.0) {
+            if (fillMaxWaitMs > TOILDB_CATALOG_MAX_FILL_WAIT_MS) {
+              program.error(
+                DiagnosticCode.User_defined_0,
+                field.name.range,
+                "@collection fillMaxWaitMs exceeds the platform catalog maximum"
+              );
+              return null;
+            }
+            entry.fillMaxWaitMs = <u32>fillMaxWaitMs;
+          }
+          let stale = labelField(opts, "fillStale");
+          if (stale.length == 0) stale = labelField(opts, "stale");
+          if (stale.length > 0) {
+            if (stale == "allow" || stale == "Allow") {
+              entry.fillAllowStale = true;
+            } else if (stale == "deny" || stale == "Deny") {
+              entry.fillAllowStale = false;
+            } else {
+              program.error(
+                DiagnosticCode.User_defined_0,
+                field.name.range,
+                "@collection fillStale must be \"allow\" or \"deny\""
+              );
+              return null;
+            }
+          }
+        }
         db.collections.push(entry);
       }
       if (db.collections.length > 0) databases.push(db);
@@ -485,7 +525,7 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
   if (databases.length == 0) return null;
 
   let w = new CatWriter();
-  w.u16(1); // version
+  w.u16(TOILDB_CATALOG_VERSION); // version
   w.u16(databases.length);
   for (let d = 0, dn = databases.length; d < dn; ++d) {
     let db = databases[d];
@@ -514,6 +554,8 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
       w.u32(0);  // collection_generation
       w.u8(0);   // replication = edgeCache
       w.u8(0);   // placement = hashKey
+      w.u32(coll.fillMaxWaitMs);
+      w.u8(coll.fillAllowStale ? 1 : 0);
       w.u16(fields.length); // n_fields
       for (let f = 0, fn = fields.length; f < fn; ++f) {
         w.str(fields[f].name);
@@ -872,6 +914,17 @@ function enumMember(expr: Expression): string | null {
     return (<PropertyAccessExpression>expr).property.text;
   }
   return null;
+}
+
+/** A string/identifier/enum-member object field value as plain text, or "" when
+ *  absent. Used for small source-level policy labels such as `fillStale`. */
+function labelField(obj: ObjectLiteralExpression, name: string): string {
+  let v = objectField(obj, name);
+  if (v == null) return "";
+  if (v instanceof StringLiteralExpression) return (<StringLiteralExpression>v).value;
+  if (v instanceof IdentifierExpression) return (<IdentifierExpression>v).text;
+  let member = enumMember(v);
+  return member != null ? member : "";
 }
 
 /** A non-negative integer-literal field value as a plain number, or -1. Reads the
