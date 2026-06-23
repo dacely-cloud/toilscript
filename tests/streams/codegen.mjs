@@ -230,8 +230,126 @@ export function probe(): i32 { return 1; }
     check("zero-task daemon still exports scheduled_tick", r.exports.includes("scheduled_tick"));
 }
 
+// ===========================================================================
+// STREAM hot-export codegen (spec 03 section 5.1, Reconciliation Part 2:
+// `stream_dispatch(i32 event_kind, i32 stream_id_lo, i32 stream_id_hi) -> i64`).
+// Mirrors the daemon cold-export tests above: compile @stream fixtures under
+// --targetMode hot, assert the emitted module EXPORTS stream_dispatch, then
+// drive it to prove event_kind routes to the declared hook on a SINGLE
+// module-singleton instance (state persists across events), and that an
+// omitted hook / unknown event_kind is a safe no-op.
+// ===========================================================================
+console.log("\nstream hot-export codegen (spec 03 section 5.1):");
+
+// toilstream.catalog hook-mask reader (just the first stream's bitmask), to
+// prove the dispatch arms and the catalog mask stay in lockstep.
+function streamHookMask(buf) {
+    const sec = findSection(buf, "toilstream.catalog");
+    if (!sec) return null;
+    let pos = 0;
+    const u16 = () => { const v = sec[pos] | (sec[pos + 1] << 8); pos += 2; return v; };
+    const u8 = () => sec[pos++];
+    const str = () => { const n = (sec[pos] | (sec[pos + 1] << 8) | (sec[pos + 2] << 16) | (sec[pos + 3] << 24)) >>> 0; pos += 4; const s = sec.toString("utf8", pos, pos + n); pos += n; return s; };
+    u16(); /* format_version */ const n = u16();
+    if (n < 1) return null;
+    str(); /* name */ str(); /* route */
+    return u8(); // hook_presence_bitmask of stream 0
+}
+
+// 1. A @stream with @connect/@message/@close (omitting @disconnect) EXPORTS
+//    stream_dispatch, and event_kind routes to the right hook on ONE instance.
+{
+    const src = `
+let __log: i32 = 0;
+export function logv(): i32 { return __log; }
+@stream
+class Chat {
+  private seq: i32 = 100;
+  @connect    onConnect(): void { this.seq = 200; __log = 1; }   // event_kind 1
+  @message    onMessage(): void { __log = this.seq + 2; }        // event_kind 2 (reads seq=200 set by connect)
+  @close      onClose(): void   { __log = this.seq + 3; }        // event_kind 3
+  // no @disconnect (the subset case): event_kind 4 must be a no-op success.
+}
+export function probe(): i32 { return 1; }
+`;
+    const r = compile(src, "hot");
+    check("hot @stream (connect/message/close) compiles", r.status === 0, `status ${r.status}\n${r.output}`);
+    check("exports stream_dispatch", r.exports.includes("stream_dispatch"), r.exports.join(","));
+    check("does NOT export daemon_start (hot artifact)", !r.exports.includes("daemon_start"));
+    if (r.status === 0 && r.wasm) {
+        // Catalog mask: connect(bit0)|message(bit1)|close(bit2) = 0b0111 = 7,
+        // disconnect(bit3) clear. The dispatch arms below MUST match this exactly.
+        check("catalog hook mask = 7 (connect|message|close, no disconnect)",
+            streamHookMask(r.wasm) === 7, `${streamHookMask(r.wasm)}`);
+        const ex = instantiate(r.wasm);
+        // event_kind 1 = connect: constructs the singleton, sets seq=200, log=1.
+        check("stream_dispatch(connect) returns 0", ex.stream_dispatch(1, 0, 0) === 0n);
+        check("connect ran (log=1)", ex.logv() === 1, `${ex.logv()}`);
+        // event_kind 2 = message: reads seq=200 (proves the SAME instance is
+        // reused across events; a fresh instance would read the initializer 100).
+        check("stream_dispatch(message) returns 0", ex.stream_dispatch(2, 0, 0) === 0n);
+        check("message dispatched on the SAME instance (log=202, seq persisted)",
+            ex.logv() === 202, `${ex.logv()}`);
+        // event_kind 3 = close.
+        ex.stream_dispatch(3, 0, 0);
+        check("close dispatched (log=203)", ex.logv() === 203, `${ex.logv()}`);
+        // event_kind 4 = disconnect: NO @disconnect hook -> safe no-op success.
+        const before = ex.logv();
+        check("stream_dispatch(disconnect) on absent hook returns 0", ex.stream_dispatch(4, 0, 0) === 0n);
+        check("absent @disconnect is a no-op (log unchanged)", ex.logv() === before, `${ex.logv()}`);
+        // event_kind 0 / unknown: invalid, no arm matches -> no-op success.
+        check("stream_dispatch(0) is a no-op success", ex.stream_dispatch(0, 0, 0) === 0n && ex.logv() === before);
+        check("stream_dispatch(99) is a no-op success", ex.stream_dispatch(99, 0, 0) === 0n && ex.logv() === before);
+    }
+}
+
+// 2. The stream id is reconstructed from its two i32 halves without trapping
+//    (the (hi<<32)|lo reassembly); a dispatch with a non-zero split id still
+//    routes by event_kind and returns 0.
+{
+    const src = `
+let __hits: i32 = 0;
+export function hits(): i32 { return __hits; }
+@stream("chat")
+class Chat {
+  @message onMessage(): void { __hits = __hits + 1; }
+}
+export function probe(): i32 { return 1; }
+`;
+    const r = compile(src, "hot");
+    check("hot @stream('chat') single-hook compiles", r.status === 0, `status ${r.status}\n${r.output}`);
+    if (r.status === 0 && r.wasm) {
+        const ex = instantiate(r.wasm);
+        // A non-trivial 64-bit id split across lo/hi (here lo=0x00000005,
+        // hi=0x00000007). The reassembly must not trap; message must dispatch.
+        check("stream_dispatch(message, lo=5, hi=7) returns 0", ex.stream_dispatch(2, 5, 7) === 0n);
+        check("message hook fired once", ex.hits() === 1, `${ex.hits()}`);
+        // A subsequent event with a different id still routes (one box, the host
+        // owns per-connection identity; this increment dispatches by event_kind).
+        ex.stream_dispatch(2, 9, 0);
+        check("second message fired (hits=2)", ex.hits() === 2, `${ex.hits()}`);
+    }
+}
+
+// 3. A @stream with zero hooks WARNS (9007) but still compiles and exports a
+//    total (no-op) stream_dispatch.
+{
+    const r = compile(`
+@stream
+class Empty {}
+export function probe(): i32 { return 1; }
+`, "hot");
+    check("9007: zero-hook @stream WARNS but compiles",
+        r.status === 0 && /declares no lifecycle hooks/.test(r.output), `status ${r.status}\n${r.output}`);
+    check("zero-hook stream still exports stream_dispatch", r.exports.includes("stream_dispatch"));
+    if (r.status === 0 && r.wasm) {
+        const ex = instantiate(r.wasm);
+        check("zero-hook stream_dispatch is a no-op success", ex.stream_dispatch(1, 0, 0) === 0n);
+    }
+}
+
 if (failures) {
-    console.error(`\ndaemon codegen: ${failures} failure(s)`);
+    console.error(`\ndaemon + stream codegen: ${failures} failure(s)`);
     process.exit(1);
 }
-console.log("\ndaemon codegen: all cases passed");
+console.log("\ndaemon + stream codegen: all cases passed");
