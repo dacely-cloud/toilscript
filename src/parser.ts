@@ -344,6 +344,10 @@ export class Parser extends DiagnosticEmitter {
   dependees: Map<string, Dependee> = new Map();
   /** Normalized paths whose `@rest` runtime import has already been injected. */
   restImportedSources: Set<string> = new Set();
+  /** Normalized paths whose `@stream` module-level registry + the single
+   *  `stream_dispatch` export have already been emitted (a project may declare
+   *  several `@stream` classes, but the export is emitted exactly once). */
+  streamExportedSources: Set<string> = new Set();
   /** Monotonic id handed to each `@ratelimit` route so the edge can key one
    *  shared limiter per route. Program-wide (one Parser per program), assigned
    *  deterministically in route declaration order. */
@@ -716,6 +720,7 @@ export class Parser extends DiagnosticEmitter {
     this.backlog = [];
     this.seenlog.clear();
     this.donelog.clear();
+    this.streamExportedSources.clear();
     this.dependees.clear();
     this.restImportedSources.clear();
   }
@@ -2596,6 +2601,8 @@ export class Parser extends DiagnosticEmitter {
           this.injectDatabaseBinding(declaration);
         } else if (dk == DecoratorKind.Daemon) {
           this.injectDaemonHandler(declaration);
+        } else if (dk == DecoratorKind.Stream) {
+          this.injectStreamHandler(declaration);
         }
       }
     }
@@ -2918,6 +2925,167 @@ export class Parser extends DiagnosticEmitter {
       "let __inst = " + instVar + ";" +
       "if (__inst == null){__inst = new " + className + "();" + instVar + " = __inst;}" +
       "__inst.__tick(__task_id);return 0;}\n");
+  }
+
+  /**
+   * Synthesize the hot-artifact stream entry for a `@stream` class (spec 03
+   * sections 5.1 / 5.4, Reconciliation Part 2 hot exports). Mirrors
+   * `injectDaemonHandler`: it scans the class methods once (same source-order
+   * walk the `toilstream.catalog` builder + `streamHookMask` use), classifies
+   * each by lifecycle-hook kind (`@connect`/`@message`/`@close`/`@disconnect`),
+   * synthesizes a `__streamDispatch(event_kind)` dispatcher onto the class, and
+   * emits the canonical hot module-level export:
+   *
+   *   `stream_dispatch(event_kind: i32, stream_id_lo: i32, stream_id_hi: i32): i64`
+   *     - the per-connection event entry, emitted EXACTLY ONCE per module. It
+   *       reconstructs the i64 stream id from the two i32 halves, selects the
+   *       active `@stream` class's dispatch thunk from a module-level registry
+   *       (one entry per `@stream` class, in `toilstream.catalog` `stream_index`
+   *       order), switches on `event_kind` (1 connect / 2 message / 3 close /
+   *       4 disconnect, the FIXED Part 2 ABI values), and returns the hook's
+   *       packed-i64 result (0 = no output / accept; a negative value is the
+   *       Part 3 reject/error bridge, wired with the real ring/StreamOutbound
+   *       runtime in a later increment).
+   *
+   * Each `@stream` class keeps its own MODULE-SINGLETON instance (a resident
+   * per-connection box): the dispatch thunk constructs it on first use and REUSES
+   * it across every later event, so per-connection state in instance fields
+   * persists for the connection lifetime (the ResetMode::None resident box of
+   * `05`). The thunk-array + the single export mirror the spec's `Streams.register`
+   * model, but SELF-CONTAINED (no external runtime import): like
+   * `injectDaemonHandler`, a top-level export referencing an unresolved runtime
+   * import would be a hard compile error (TS6054), so the registry + the export
+   * are plain module-level code emitted once (guarded by `streamExportedSources`,
+   * exactly as `injectRestController` guards its one-per-source import).
+   *
+   * The `event_kind` ids are exactly the `toilstream.catalog` hook bitmask bits
+   * plus one (connect=1 <-> bit0, message=2 <-> bit1, close=3 <-> bit2,
+   * disconnect=4 <-> bit3, matching `streamHookMask` in `dbcatalog.ts`), so the
+   * dispatch and the catalog never schism. `event_kind = 5` (channel, F10) is a
+   * later increment: the base AST carries no `@channel` kind and the catalog mask
+   * is 4-bit, so this shim emits the four lifecycle arms only.
+   *
+   * Active-stream selection (which registry entry a connection routes to) is
+   * owned by the host/ring runtime (spec 5.1: the `Streams` singleton resolves the
+   * stream identity off the ring); this increment routes to the host-selected
+   * index, defaulting to 0, so a single-`@stream` module dispatches exactly and a
+   * multi-`@stream` module compiles to one well-formed export.
+   *
+   * Only hooks the class actually declares get a dispatch arm; an event for an
+   * absent hook falls through to `return 0` (a no-op success per the contract,
+   * never a crash). A hook that declares parameters (the typed `@message`
+   * `@data` arg, or a `StreamInbound`/`StreamPacket` view) is given a no-op arm
+   * here too: the `StreamInbound`/`StreamPacket`/`StreamOutbound` runtime + the
+   * ingress-ring read are owned by toiljs (spec 5.4) and land in a later
+   * increment, so this self-contained shim cannot synthesize those argument
+   * values yet; calling a zero-arg hook directly is the part that compiles and
+   * runs today (every gating/catalog fixture uses the zero-arg/void hook form).
+   *
+   * Fires the 9013 warning for a `@stream` class with zero lifecycle hooks (a
+   * hookless stream can never receive traffic), mirroring the daemon 9008 warning
+   * shape; gating already rejects a hook outside a `@stream`.
+   */
+  private injectStreamHandler(declaration: ClassDeclaration): void {
+    let className = declaration.name.text;
+    let members = declaration.members;
+
+    // Collect the lifecycle hooks in SOURCE DECLARATION ORDER, applying exactly
+    // the same filter `streamHookMask` (dbcatalog.ts) uses (method member that
+    // carries `@connect`/`@message`/`@close`/`@disconnect`), so the dispatch and
+    // the catalog hook_presence_bitmask stay in lockstep. Each event_kind id is
+    // the catalog bit index + 1 (connect=1<->bit0 .. disconnect=4<->bit3).
+    let connectName: string | null = null;
+    let messageName: string | null = null;
+    let closeName: string | null = null;
+    let disconnectName: string | null = null;
+    let hookCount = 0;
+    for (let i = 0, k = members.length; i < k; ++i) {
+      let member = members[i];
+      if (member.kind != NodeKind.MethodDeclaration) continue;
+      let method = <MethodDeclaration>member;
+      let decos = method.decorators;
+      if (decos == null) continue;
+      let methodName = method.name.text;
+      // A hook that declares parameters cannot be called from this self-contained
+      // shim yet (the StreamInbound/StreamPacket/StreamOutbound runtime + the ring
+      // read are a later increment, spec 5.4), so it is recorded as PRESENT (for
+      // the count) but given a no-op arm (the call below is gated on zero arity).
+      let zeroArg = method.signature.parameters.length == 0;
+      for (let d = 0, dn = decos.length; d < dn; ++d) {
+        switch (decos[d].decoratorKind) {
+          case DecoratorKind.Connect:    { if (connectName == null)    { ++hookCount; } if (zeroArg) connectName = methodName;    break; }
+          case DecoratorKind.Message:    { if (messageName == null)    { ++hookCount; } if (zeroArg) messageName = methodName;    break; }
+          case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
+          case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
+        }
+      }
+    }
+
+    // 9013: a `@stream` with zero lifecycle hooks is a WARNING (mirrors the
+    // daemon 9008 zero-task warning). A hookless stream can never receive
+    // traffic, but it still compiles to a total (no-op) dispatcher.
+    if (hookCount == 0) {
+      this.warning(
+        DiagnosticCode.Stream_class_0_declares_no_lifecycle_hooks,
+        declaration.name.range, className
+      );
+    }
+
+    // Synthesize the per-event dispatcher onto the class. `__ev` is the canonical
+    // Part 2 event_kind (1 connect / 2 message / 3 close / 4 disconnect); 0 and
+    // any unknown value are rejected host-side before dispatch and fall through
+    // here to a no-op `return 0`. Connect/message may carry a packed-i64 reply
+    // (0 today: the StreamOutbound encode bridge is a later increment); close and
+    // disconnect are void and return 0.
+    let dispatchArms = "";
+    if (connectName != null)    dispatchArms += "if (__ev == 1) { this." + connectName + "(); return 0; }";
+    if (messageName != null)    dispatchArms += "if (__ev == 2) { this." + messageName + "(); return 0; }";
+    if (closeName != null)      dispatchArms += "if (__ev == 3) { this." + closeName + "(); return 0; }";
+    if (disconnectName != null) dispatchArms += "if (__ev == 4) { this." + disconnectName + "(); return 0; }";
+    this.injectClassMember(declaration,
+      "__streamDispatch(__ev: i32): i64{" + dispatchArms + "return 0;}");
+
+    let userSource = declaration.range.source;
+    let key = userSource.normalizedPath;
+
+    // Emit the module-level registry + the single `stream_dispatch` export ONCE
+    // per source (a project may declare several `@stream` classes; the export is
+    // emitted exactly once, like `injectRestController`'s one-per-source import).
+    // The registry is an Array of dispatch thunks; the export selects the active
+    // entry (host/ring-owned selection, default 0) and routes by `event_kind`.
+    if (!this.streamExportedSources.has(key)) {
+      this.streamExportedSources.add(key);
+      this.injectTopLevelStatements(declaration,
+        "// @ts-ignore: injected stream registry + entry (spec 03 section 5.1)\n" +
+        "let __toilStreamHandlers: Array<(__ev: i32) => i64> = [];\n");
+      this.injectTopLevelStatements(declaration,
+        "let __toilStreamActive: i32 = 0;\n");
+      this.injectTopLevelStatements(declaration,
+        "export function stream_dispatch(__event_kind: i32, __stream_id_lo: i32, __stream_id_hi: i32): i64{" +
+        // Reassemble the 64-bit connection id from its two i32 halves (unsigned),
+        // so the active box has the connection identity for StreamInfo / future
+        // ring resolution; this increment routes by event_kind on the selected
+        // stream and tolerates any (lo, hi) without trapping.
+        "let __stream_id: u64 = (<u64>(<u32>__stream_id_hi) << 32) | <u64>(<u32>__stream_id_lo);" +
+        "let __i = __toilStreamActive;" +
+        "if (__i < 0 || __i >= __toilStreamHandlers.length) return 0;" +
+        "return __toilStreamHandlers[__i](__event_kind);}\n");
+    }
+
+    // Per-class: a MODULE-SINGLETON instance (resident per-connection box,
+    // constructed lazily and reused across events so state persists) plus its
+    // registration into the module registry, in `stream_index` order (the same
+    // source-declaration order the catalog uses). The captured singleton var is
+    // class-unique so multiple `@stream` classes do not collide.
+    let instVar = "__toilStreamInstance_" + className;
+    this.injectTopLevelStatements(declaration,
+      "// @ts-ignore: injected stream singleton + registration (spec 03 section 5.1)\n" +
+      "let " + instVar + ": " + className + " | null = null;\n");
+    this.injectTopLevelStatements(declaration,
+      "__toilStreamHandlers.push((__ev: i32): i64 => {" +
+      "let __inst = " + instVar + ";" +
+      "if (__inst == null){__inst = new " + className + "();" + instVar + " = __inst;}" +
+      "return __inst.__streamDispatch(__ev);});\n");
   }
 
   /** True if a function signature takes no parameters and returns `void` (the
