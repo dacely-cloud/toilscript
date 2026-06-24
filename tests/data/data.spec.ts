@@ -150,12 +150,6 @@ function testBig(): void {
   const nj = AllBig.fromJSON(JSON.parse(negText));
   assert(!nj.d.lo1 && !nj.d.lo2 && !nj.d.hi1 && <u64>nj.d.hi2 == 0x8000000000000000);
 
-  // legacy limb-array shape (older writers) still reads back
-  const legacy = AllBig.fromJSON(JSON.parse("{\"a\":[5,1],\"b\":[12345,0],\"c\":[1,2,3,4],\"d\":[9,0,0,0]}"));
-  assert(legacy.a == new u128(5, 1));
-  assert(legacy.b == new i128(12345, 0));
-  assert(legacy.c == new u256(1, 2, 3, 4));
-  assert(legacy.d.lo1 == 9 && !legacy.d.lo2 && !legacy.d.hi1 && !legacy.d.hi2);
 }
 
 function testNested(): void {

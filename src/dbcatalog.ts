@@ -40,7 +40,7 @@ import {
   TypeNode
 } from "./ast";
 
-const TOILDB_CATALOG_VERSION: i32 = 2;
+const TOILDB_CATALOG_VERSION: i32 = 1;
 const TOILDB_CATALOG_DEFAULT_FILL_WAIT_MS: u32 = 50;
 const TOILDB_CATALOG_MAX_FILL_WAIT_MS: f64 = 60_000.0;
 
@@ -90,8 +90,8 @@ function fnvStr(h: u32, s: string): u32 {
  * toildb's `SchemaDescriptor::layout_hash` (the runtime side): the algorithm,
  * the `seen` add/remove, and the declaration-order traversal are pinned in lock
  * step. A FLAT type (no field whose type is in `typeMap`) hashes to the SAME
- * value as the old flat hash, so existing pinned vectors stay green; an absent
- * `typeMap` (undefined) is flat/back-compatible.
+ * value as the flat hash; an absent `typeMap` (undefined) is treated as a flat
+ * descriptor.
  *
  * `typeMap` MUST contain the SAME set of `@data` types as the runtime's
  * `toildb.types` registry (collection value types + their nested types, EXCLUDING
