@@ -2138,8 +2138,8 @@ export class Program extends DiagnosticEmitter {
   ): ClassPrototype | null {
     let name = declaration.name.text;
     // Class-decorator gating is target-mode-conditioned (spec 03 section 4.2):
-    // hot/legacy admit @service/@rest/@stream; cold admits @daemon. @daemon is
-    // never admitted outside cold, so legacy (targetMode == null) rejects it too.
+    // hot/default request admit @service/@rest/@stream; cold admits @daemon. @daemon is
+    // never admitted outside cold, so targetMode == null rejects it too.
     let targetMode = this.options.targetMode;
     let classFlags =
       DecoratorFlags.Global |
@@ -2298,7 +2298,7 @@ export class Program extends DiagnosticEmitter {
       acceptedFlags |= DecoratorFlags.OperatorBinary
                     |  DecoratorFlags.OperatorPrefix
                     |  DecoratorFlags.OperatorPostfix;
-      // `@remote`/`@route` are hot/legacy method decorators (cold rejects them, spec 03 4.2).
+      // `@remote`/`@route` are hot/default request method decorators (cold rejects them, spec 03 4.2).
       if (methodTargetMode != "cold") {
         acceptedFlags |= DecoratorFlags.Remote   // `@remote` exposes a `@service` method as an RPC endpoint
                       |  DecoratorFlags.Route    // `@route`/`@get`/... exposes a `@rest` method as an HTTP route

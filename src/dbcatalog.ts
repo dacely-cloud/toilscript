@@ -853,7 +853,7 @@ function validRoutePattern(path: string): bool {
 //
 // `toil.surface`       - always (per artifact); target mode + surface flags +
 //                        build identity + the hot/cold coherence hashes.
-// `toilstream.catalog` - per `@stream` class (hot / legacy).
+// `toilstream.catalog` - per `@stream` class (hot / default request).
 // `toildaemon.catalog` - the single `@daemon` class + its `@scheduled` tasks
 //                        with the COMPILE-TIME expanded cron bitmasks (F6).
 //
@@ -1404,7 +1404,7 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
 /** True if the (non-library) sources declare ANY Toil surface decorator
  *  (`@rest`/`@stream`/`@daemon`/`@scheduled`/`@database`/`@data`). Used to keep a
  *  bare AssemblyScript module (none of these) free of a `toil.surface` section in
- *  legacy mode, so an ordinary AS compile stays byte-identical. */
+ *  default request mode, so an ordinary AS compile stays byte-identical. */
 function hasToilSurface(sources: Source[]): bool {
   for (let i = 0, k = sources.length; i < k; ++i) {
     let source = sources[i];
@@ -1598,22 +1598,21 @@ function pairCoherenceHash(sources: Source[], buildId: string, dataHash: u32): u
  *    u32 data_coherence_hash
  *    u32 pair_coherence_hash
  *
- *  `targetMode` "cold" -> 1; "hot" or null (legacy single artifact, treated as
- *  hot per Part 5) -> 0. The two coherence hashes use the SAME `layoutHash` /
+ *  `targetMode` "cold" -> 1; "hot" or null (default request artifact, treated
+ *  as hot per Part 5) -> 0. The two coherence hashes use the SAME `layoutHash` /
  *  `recursionTypeMap` machinery as the toildb catalog, so a hot pass and a cold
  *  pass over the same sources compute identical `data_coherence_hash` and
  *  `pair_coherence_hash` independently (doc 02 AN-4). `build_id` is empty and
  *  `abi_version` is 1 in this increment (the toiljs build-identity plumbing and
  *  the export-name fingerprint component land with the codegen increment).
  *
- *  Returns `null` (no section) for a bare AssemblyScript module compiled in
- *  LEGACY mode (`targetMode == null`) that declares NO Toil surface at all
+ *  Returns `null` (no section) for a bare AssemblyScript module compiled with
+ *  `targetMode == null` that declares NO Toil surface at all
  *  (`@rest`/`@stream`/`@daemon`/`@scheduled`/`@database`/`@data`), so an ordinary
  *  AS compile stays byte-identical (the same gating philosophy as the existing
  *  `toildb.catalog`, which is absent without `@database`). Part 5 / doc 02 AN-2
- *  requires the section in every TOIL artifact (including a legacy single-artifact
- *  toil build, which always carries a toil surface); a non-toil module is not a
- *  toil artifact. An explicit `--targetMode hot|cold` always emits the section.
+ *  requires the section in every TOIL artifact; a non-toil module is not a toil
+ *  artifact. An explicit `--targetMode hot|cold` always emits the section.
  */
 export function buildToilSurface(program: Program, targetMode: string | null): Uint8Array | null {
   let sources = program.sources;

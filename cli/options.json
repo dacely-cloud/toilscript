@@ -25,7 +25,7 @@
   },
   "targetMode": {
     "category": "General",
-    "description": "Toil compile surface mode: 'hot' (request/stream) or 'cold' (daemon). Omit for the legacy single-artifact build.",
+    "description": "Toil compile surface mode: 'hot' (request/stream) or 'cold' (daemon). Omit for the default request artifact.",
     "type": "s"
   },
   "noConfigEntries": {

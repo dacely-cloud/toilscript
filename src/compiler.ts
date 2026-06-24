@@ -246,8 +246,8 @@ export class Options {
 
   /** WebAssembly target. Defaults to {@link Target.Wasm32}. */
   target: Target = Target.Wasm32;
-  /** Toil compile surface mode. null = legacy single-artifact build (all surfaces allowed,
-   *  matching pre-split behavior). "hot" = request + stream surface. "cold" = daemon surface. */
+  /** Toil compile surface mode. null = default request artifact. "hot" = request + stream surface.
+   *  "cold" = daemon surface. */
   targetMode: string | null = null;   // "hot" | "cold" | null
   /** Runtime type. Defaults to Incremental GC. */
   runtime: Runtime = Runtime.Incremental;
@@ -827,8 +827,8 @@ export class Compiler extends DiagnosticEmitter {
 
     // Streams + daemon surface sections (spec 03 sections 6/7/8, Part 5 order:
     // toildb.catalog -> toildb.types -> toil.surface -> stream|daemon catalog).
-    // `toil.surface` is emitted in EVERY mode INCLUDING legacy (targetMode null,
-    // stamped as a hot artifact, Part 5 / doc 02 AN-2), so the host has the
+    // `toil.surface` is emitted in EVERY Toil mode INCLUDING the default request
+    // artifact (targetMode null, stamped as hot), so the host has the
     // target mode + surface flags + the hot/cold coherence hash.
     let targetMode = this.options.targetMode;
     let surface = buildToilSurface(program, targetMode);
@@ -838,7 +838,7 @@ export class Compiler extends DiagnosticEmitter {
       // mutating HTTP methods that the source declared read-only with `@query`.
       let routeKinds = buildToilDbRouteKinds(program);
       if (routeKinds != null) module.addCustomSection("toildb.route_kinds", routeKinds);
-      // hot or legacy: any @stream class -> toilstream.catalog.
+      // hot/default request: any @stream class -> toilstream.catalog.
       let streamCat = buildToilStreamCatalog(program);
       if (streamCat != null) module.addCustomSection("toilstream.catalog", streamCat);
     }

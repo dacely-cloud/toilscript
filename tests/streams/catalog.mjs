@@ -304,7 +304,7 @@ export function probe(): i32 { return 1; }
 }
 
 // ===========================================================================
-// 5. toil.surface: hot (rest+stream), cold (daemon+scheduled+database), legacy.
+// 5. toil.surface: hot (rest+stream), cold (daemon+scheduled+database), default request.
 // ===========================================================================
 function readSurface(sec) {
     const r = reader(sec);
@@ -369,25 +369,25 @@ export function probe(): i32 { return 1; }
         check("fingerprint differs hot vs cold (mode-distinguished)", hs.fingerprint !== coldSurface.fingerprint);
     }
 
-    // legacy (null mode): toil.surface is ALWAYS emitted (Part 5 / doc 02 AN-2),
+    // default request (null mode): toil.surface is ALWAYS emitted (Part 5 / doc 02 AN-2),
     // stamped as hot (target_mode=0). NO toilstream/toildaemon catalog.
-    const legacySrc = `
+    const defaultRequestSrc = `
 @rest
 class Api { @get ping(): i32 { return 1; } }
 export function probe(): i32 { return 1; }
 `;
-    const legacy = compile(legacySrc, null);
-    check("legacy project compiles", legacy.status === 0, legacy.output);
-    if (legacy.status === 0 && legacy.wasm) {
-        const sec = findSection(legacy.wasm, "toil.surface");
-        check("legacy toil.surface IS emitted (Part 5)", sec !== null);
+    const defaultRequest = compile(defaultRequestSrc, null);
+    check("default request project compiles", defaultRequest.status === 0, defaultRequest.output);
+    if (defaultRequest.status === 0 && defaultRequest.wasm) {
+        const sec = findSection(defaultRequest.wasm, "toil.surface");
+        check("default request toil.surface IS emitted (Part 5)", sec !== null);
         if (sec) {
             const s = readSurface(sec);
-            check("legacy target_mode=0 (hot)", s.targetMode === 0);
-            check("legacy flags has rest bit", (s.surfaceFlags & 0x01) === 0x01);
+            check("default request target_mode=0 (hot)", s.targetMode === 0);
+            check("default request flags has rest bit", (s.surfaceFlags & 0x01) === 0x01);
         }
-        check("legacy has no toilstream.catalog", findSection(legacy.wasm, "toilstream.catalog") === null);
-        check("legacy has no toildaemon.catalog", findSection(legacy.wasm, "toildaemon.catalog") === null);
+        check("default request has no toilstream.catalog", findSection(defaultRequest.wasm, "toilstream.catalog") === null);
+        check("default request has no toildaemon.catalog", findSection(defaultRequest.wasm, "toildaemon.catalog") === null);
     }
 }
 
