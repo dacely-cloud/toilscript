@@ -115,8 +115,13 @@ interface StreamOptions {
 /** Marks a class as a stream protocol handler (runs on L2/L3 nodes). Its
  *  `@connect`/`@message`/`@close`/`@disconnect`/`@channel` methods are the
  *  lifecycle hooks. A project that uses `@stream` may NOT declare any `@service`
- *  or `@remote` anywhere (compiler-enforced). Hot/stream artifact only. */
+ *  or `@remote` anywhere (compiler-enforced). Hot/stream artifact only.
+ *
+ *  Three forms (mirroring `@rest`): bare `@stream` (the routing name is the class
+ *  name), `@stream("name")` (an explicit mount name / routing key, e.g. `/name`),
+ *  or `@stream({ scope, message, ... })` for the full config object. */
 declare function stream(target: Function): void;
+declare function stream(name?: string): (target: Function) => void;
 declare function stream(options: StreamOptions): (target: Function) => void;
 
 /** Stream lifecycle-hook method decorators on a `@stream` class. `@connect` runs
