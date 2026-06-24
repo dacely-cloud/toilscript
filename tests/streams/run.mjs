@@ -85,6 +85,18 @@ class Chat { @connect onConnect(): void {} }
 export function probe(): i32 { return 1; }
 `, "hot");
 
+// The raw-bytes message bridge: a @message taking a StreamPacket and returning a StreamOutbound
+// compiles (the injected ingress/egress ring runtime + the StreamPacket reader + StreamOutbound
+// encoder, spec 03 section 3.4 / 5.1). A reject() / empty() must also type-check.
+expectPass("hot: raw @message StreamPacket -> StreamOutbound bridge", `
+@stream
+class Echo {
+  @message reply(p: StreamPacket): StreamOutbound { return StreamOutbound.reply(p.bytes()); }
+  @connect onConnect(): void {}
+}
+export function probe(): i32 { return 1; }
+`, "hot");
+
 // Back-compat: an existing @rest controller still compiles under legacy (null) mode.
 expectPass("legacy: @rest controller still compiles", `
 @data
