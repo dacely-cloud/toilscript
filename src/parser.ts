@@ -2997,6 +2997,9 @@ export class Parser extends DiagnosticEmitter {
     let messageName: string | null = null;
     let closeName: string | null = null;
     let disconnectName: string | null = null;
+    // The recorded @message hook's parameter arity: 0 = zero-arg (legacy no-op call); 1 = the
+    // raw-bytes `StreamPacket` message bridge (spec 03 section 3.4 / 5.1).
+    let messageArgc = 0;
     let hookCount = 0;
     for (let i = 0, k = members.length; i < k; ++i) {
       let member = members[i];
@@ -3005,15 +3008,16 @@ export class Parser extends DiagnosticEmitter {
       let decos = method.decorators;
       if (decos == null) continue;
       let methodName = method.name.text;
-      // A hook that declares parameters cannot be called from this self-contained
-      // shim yet (the StreamInbound/StreamPacket/StreamOutbound runtime + the ring
-      // read are a later increment, spec 5.4), so it is recorded as PRESENT (for
-      // the count) but given a no-op arm (the call below is gated on zero arity).
+      // @connect/@close/@disconnect call only their ZERO-ARG form (the StreamInbound/
+      // StreamConnectionEvent runtime is a later increment, spec 3.1/3.3); a param'd form stays
+      // recorded-present but no-op. @message is wired to the raw-bytes bridge ONLY when its signature
+      // is exactly `(StreamPacket): StreamOutbound`; a typed `message:` mode (the param is a @data
+      // class returning void) stays no-op, so `.__encode()` is never emitted on a void return.
       let zeroArg = method.signature.parameters.length == 0;
       for (let d = 0, dn = decos.length; d < dn; ++d) {
         switch (decos[d].decoratorKind) {
           case DecoratorKind.Connect:    { if (connectName == null)    { ++hookCount; } if (zeroArg) connectName = methodName;    break; }
-          case DecoratorKind.Message:    { if (messageName == null)    { ++hookCount; } if (zeroArg) messageName = methodName;    break; }
+          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; if (zeroArg) { messageName = methodName; messageArgc = 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamPacket") && this.isNamedType(method.signature.returnType, "StreamOutbound")) { messageName = methodName; messageArgc = 1; } } break; }
           case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
           case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
         }
@@ -3033,12 +3037,14 @@ export class Parser extends DiagnosticEmitter {
     // Synthesize the per-event dispatcher onto the class. `__ev` is the canonical
     // Part 2 event_kind (1 connect / 2 message / 3 close / 4 disconnect); 0 and
     // any unknown value are rejected host-side before dispatch and fall through
-    // here to a no-op `return 0`. Connect/message may carry a packed-i64 reply
-    // (0 today: the StreamOutbound encode bridge is a later increment); close and
-    // disconnect are void and return 0.
+    // here to a no-op `return 0`. A 1-param @message carries a packed-i64 via `__encode` (0 for
+    // accept/empty/reply-staged-to-egress, a negative `-(0x10000 + 0x02xx)` for a reject); a 0-arg
+    // @message and connect/close/disconnect are void and return 0.
     let dispatchArms = "";
     if (connectName != null)    dispatchArms += "if (__ev == 1) { this." + connectName + "(); return 0; }";
-    if (messageName != null)    dispatchArms += "if (__ev == 2) { this." + messageName + "(); return 0; }";
+    if (messageName != null)    dispatchArms += (messageArgc == 1)
+      ? ("if (__ev == 2) { return this." + messageName + "(new StreamPacket()).__encode(); }")
+      : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
     if (closeName != null)      dispatchArms += "if (__ev == 3) { this." + closeName + "(); return 0; }";
     if (disconnectName != null) dispatchArms += "if (__ev == 4) { this." + disconnectName + "(); return 0; }";
     this.injectClassMember(declaration,
@@ -3054,6 +3060,9 @@ export class Parser extends DiagnosticEmitter {
     // entry (host/ring-owned selection, default 0) and routes by `event_kind`.
     if (!this.streamExportedSources.has(key)) {
       this.streamExportedSources.add(key);
+      // The ingress + egress ring runtime + the raw `StreamPacket` reader and `StreamOutbound`
+      // encoder (spec 05 sections 5-6), injected once; see `streamRuntimeSource` for the ABI.
+      this.injectTopLevelStatements(declaration, this.streamRuntimeSource());
       this.injectTopLevelStatements(declaration,
         "// @ts-ignore: injected stream registry + entry (spec 03 section 5.1)\n" +
         "let __toilStreamHandlers: Array<(__ev: i32) => i64> = [];\n");
@@ -3061,11 +3070,10 @@ export class Parser extends DiagnosticEmitter {
         "let __toilStreamActive: i32 = 0;\n");
       this.injectTopLevelStatements(declaration,
         "export function stream_dispatch(__event_kind: i32, __stream_id_lo: i32, __stream_id_hi: i32): i64{" +
-        // Reassemble the 64-bit connection id from its two i32 halves (unsigned),
-        // so the active box has the connection identity for StreamInfo / future
-        // ring resolution; this increment routes by event_kind on the selected
-        // stream and tolerates any (lo, hi) without trapping.
-        "let __stream_id: u64 = (<u64>(<u32>__stream_id_hi) << 32) | <u64>(<u32>__stream_id_lo);" +
+        // Publish the 64-bit connection id (reassembled from its two i32 halves, unsigned) into the
+        // global the active box's StreamPacket reads for `connectionId`, then route by event_kind on
+        // the selected stream (tolerating any (lo, hi) without trapping).
+        "__toilStreamConnId = (<u64>(<u32>__stream_id_hi) << 32) | <u64>(<u32>__stream_id_lo);" +
         "let __i = __toilStreamActive;" +
         "if (__i < 0 || __i >= __toilStreamHandlers.length) return 0;" +
         "return __toilStreamHandlers[__i](__event_kind);}\n");
@@ -3085,6 +3093,80 @@ export class Parser extends DiagnosticEmitter {
       "let __inst = " + instVar + ";" +
       "if (__inst == null){__inst = new " + className + "();" + instVar + " = __inst;}" +
       "return __inst.__streamDispatch(__ev);});\n");
+  }
+
+  /** True if `node` is a non-nullable named type whose identifier is exactly `name`
+   *  (e.g. a `StreamPacket` parameter or a `StreamOutbound` return on a raw @message). */
+  private isNamedType(node: TypeNode | null, name: string): bool {
+    if (node == null) return false;
+    if (!(node instanceof NamedTypeNode)) return false;
+    let named = <NamedTypeNode>node;
+    if (named.isNullable) return false;
+    return named.name.identifier.text == name;
+  }
+
+  /**
+   * The injected stream ring runtime (spec 05 sections 5-6; byte layouts in 10), emitted once per
+   * program under the `stream_dispatch` export gate. Provides two fixed 128 KiB rings in linear
+   * memory (ingress host->guest, egress guest->host), each a 32-byte `RingControl` + frame region,
+   * exported via `stream_ring_offset/capacity` + `stream_egress_offset/capacity` (the host reads
+   * these at box build, stamps both RingControls, and owns the ingress write_cursor / egress
+   * read_cursor; the guest owns the ingress read_cursor / egress write_cursor - SPSC on the one
+   * resident-box thread). `StreamPacket` drains ONE ingress `RingFrame` (raw @message arg);
+   * `StreamOutbound.reply` stages ONE DATA_RELIABLE frame into the egress ring (bounds-checked ->
+   * `0x0205`); `__encode` lowers to the packed i64 (0 for accept/empty/reply; `-(0x10000 + 0x02xx)`
+   * for a reject, normalized to `0x0208`). The `.d.ts` declares these for the editor only (not
+   * compile-loaded); these injected `@global` classes are the real impls, like `AuthUser`.
+   * RingControl(32B): u32 magic|u16 version|u16 flags|u32 capacity|u32 write|u32 read|u32 dropped|2xu32.
+   * RingFrame(12B): u8 version|u8 type|u16 flags|u32 length|u32 msg_seq|payload.
+   */
+  private streamRuntimeSource(): string {
+    return [
+      "// @ts-ignore: injected stream ring runtime (spec 05 sections 5-6)",
+      "const __TOIL_STREAM_CAP: i32 = 131072;",
+      "const __toilStreamIngress: StaticArray<u8> = new StaticArray<u8>(32 + __TOIL_STREAM_CAP);",
+      "const __toilStreamEgress: StaticArray<u8> = new StaticArray<u8>(32 + __TOIL_STREAM_CAP);",
+      "let __toilStreamConnId: u64 = 0;",
+      "export function stream_ring_offset(): i32 { return <i32>changetype<usize>(__toilStreamIngress); }",
+      "export function stream_ring_capacity(): i32 { return __TOIL_STREAM_CAP; }",
+      "export function stream_egress_offset(): i32 { return <i32>changetype<usize>(__toilStreamEgress); }",
+      "export function stream_egress_capacity(): i32 { return __TOIL_STREAM_CAP; }",
+      "// @ts-ignore: injected",
+      "@global class StreamPacket {",
+      "  private __p: usize = 0; private __n: i32 = 0;",
+      "  constructor() {",
+      "    let b = changetype<usize>(__toilStreamIngress); let rg = b + 32;",
+      "    let w = load<u32>(b + 12); let r = load<u32>(b + 16);",
+      "    if (r < w) { let f = rg + <usize>r; let n = load<u32>(f + 4); this.__p = f + 12; this.__n = <i32>n; store<u32>(b + 16, r + 12 + n); }",
+      "  }",
+      "  get connectionId(): u64 { return __toilStreamConnId; }",
+      "  get length(): i32 { return this.__n; }",
+      "  bytes(): Uint8Array { let o = new Uint8Array(this.__n); if (this.__n > 0) memory.copy(o.dataStart, this.__p, <usize>this.__n); return o; }",
+      "  at(i: i32): u8 { return (i >= 0 && i < this.__n) ? load<u8>(this.__p + <usize>i) : 0; }",
+      "}",
+      "// @ts-ignore: injected",
+      "@global class StreamOutbound {",
+      "  private __k: i32; private __c: i32;",
+      "  constructor(k: i32, c: i32) { this.__k = k; this.__c = c; }",
+      "  static accept(): StreamOutbound { return new StreamOutbound(1, 0); }",
+      "  static empty(): StreamOutbound { return new StreamOutbound(1, 0); }",
+      "  static reject(reason: u16): StreamOutbound { let c: i32 = <i32>reason; if (c < 0x0200 || c > 0x02FF) c = 0x0208; return new StreamOutbound(0, c); }",
+      "  static reply(body: Uint8Array): StreamOutbound {",
+      "    let n: i32 = body.length;",
+      "    if (n < 0 || n > (__TOIL_STREAM_CAP - 12)) return new StreamOutbound(0, 0x0205);",
+      "    let b = changetype<usize>(__toilStreamEgress); let rg = b + 32;",
+      "    let w = load<u32>(b + 12); let r = load<u32>(b + 16);",
+      "    if (r == w) { w = 0; store<u32>(b + 12, 0); store<u32>(b + 16, 0); }",
+      "    let f = rg + <usize>w;",
+      "    store<u8>(f, 1); store<u8>(f + 1, 1); store<u16>(f + 2, 0); store<u32>(f + 4, <u32>n); store<u32>(f + 8, 0);",
+      "    if (n > 0) memory.copy(f + 12, body.dataStart, <usize>n);",
+      "    store<u32>(b + 12, w + 12 + <u32>n);",
+      "    return new StreamOutbound(1, 0);",
+      "  }",
+      "  __encode(): i64 { if (this.__k == 0) return -(<i64>0x10000 + <i64>this.__c); return 0; }",
+      "}",
+      "",
+    ].join("\n");
   }
 
   /** True if a function signature takes no parameters and returns `void` (the
