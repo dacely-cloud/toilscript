@@ -25,7 +25,8 @@ import {
   buildToilDbRouteKinds,
   buildToilSurface,
   buildToilStreamCatalog,
-  buildToilDaemonCatalog
+  buildToilDaemonCatalog,
+  buildToilDbDerives
 } from "./dbcatalog";
 
 import {
@@ -841,6 +842,11 @@ export class Compiler extends DiagnosticEmitter {
       // hot/default request: any @stream class -> toilstream.catalog.
       let streamCat = buildToilStreamCatalog(program);
       if (streamCat != null) module.addCustomSection("toilstream.catalog", streamCat);
+      // Materialized-view wiring: a @database with @derive methods -> toildb.derives.
+      // The dev runtime (and edge runner) reads this to map a source-collection
+      // write back to the derives it must re-run under FunctionKind=Derive.
+      let derives = buildToilDbDerives(program);
+      if (derives != null) module.addCustomSection("toildb.derives", derives);
     }
     if (targetMode == "cold") {
       // cold: a @daemon class -> toildaemon.catalog (parses @scheduled specs,

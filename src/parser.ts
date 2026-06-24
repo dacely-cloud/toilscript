@@ -2598,6 +2598,7 @@ export class Parser extends DiagnosticEmitter {
           this.injectRestController(declaration, decorators[i]);
         } else if (dk == DecoratorKind.Database) {
           this.injectDatabaseBinding(declaration);
+          this.injectDeriveHandler(declaration);
         } else if (dk == DecoratorKind.Daemon) {
           this.injectDaemonHandler(declaration);
         } else if (dk == DecoratorKind.Stream) {
@@ -2635,6 +2636,13 @@ export class Parser extends DiagnosticEmitter {
       // form, and still seen by the `@collection` scanners (the catalog section +
       // the function-kind checks), which do not care whether the field is static.
       if (field.is(CommonFlags.Static)) field.flags &= ~CommonFlags.Static;
+      // The demoted field is vestigial (every `Db.coll` access goes through the
+      // static getter synthesized below; the instance field is never read), so
+      // mark it definitely-assigned - identical to the legacy `@collection coll!:
+      // T` form. This also lets the `@derive` runner construct the class (the
+      // `new Db()` in the synthesized `derive_run`) without tripping strict
+      // property initialization on a field that has no initializer by design.
+      field.flags |= CommonFlags.DefinitelyAssigned;
       let handleName = named.name.identifier.text;
       let collName = field.name.text;
       let typeArgs = named.typeArguments;
@@ -2820,6 +2828,59 @@ export class Parser extends DiagnosticEmitter {
     }
     this.injectTopLevelStatements(declaration,
       "__toilRest.register((__q: __toilReq): __toilResp | null => new " + className + "().__tryRoute(__q));\n");
+  }
+
+  /**
+   * Synthesizes the host-called `derive_run(derive_id)` entry for a `@database`
+   * class that declares one or more `@derive` materializer methods. The host
+   * (edge derive runner / dev runtime) invokes a derive AFTER a write to one of
+   * its source collections, under `FunctionKind=Derive`, so the derive body may
+   * scan (`events.latest`) and `view.publish` (both gated to Derive/Job by
+   * `dbKindAllows`). Each `@derive` method is assigned a `derive_id` in source
+   * declaration order, matching the `toildb.derives` catalog (section built by
+   * `buildToilDbDerives`) 1:1, exactly as `@scheduled`/`task_index` does for the
+   * daemon. A `@database` with no `@derive` method emits nothing (byte-identical
+   * to today). The single box-lifetime instance is kept in a module-level
+   * singleton, mirroring the daemon's `scheduled_tick` synthesis.
+   */
+  private injectDeriveHandler(declaration: ClassDeclaration): void {
+    let className = declaration.name.text;
+    let members = declaration.members;
+
+    let dispatchArms = "";
+    let deriveCount = 0;
+    for (let i = 0, k = members.length; i < k; ++i) {
+      let member = members[i];
+      if (member.kind != NodeKind.MethodDeclaration) continue;
+      let method = <MethodDeclaration>member;
+      if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Derive)) continue;
+      let methodName = method.name.text;
+      dispatchArms += (deriveCount == 0 ? "if" : "else if") +
+        " (__id == " + deriveCount.toString() + ") this." + methodName + "();";
+      ++deriveCount;
+    }
+
+    // A `@database` without any `@derive` materializer is the common case: emit
+    // no dispatcher and no export, so non-derive programs stay byte-identical.
+    if (deriveCount == 0) return;
+
+    // Per-derive dispatcher onto the class. `derive_id` indices are assigned in
+    // `@derive` source-declaration order and MUST equal the per-derive id of
+    // `toildb.derives`, so the host's `derive_run(derive_id)` maps 1:1.
+    this.injectClassMember(declaration,
+      "__deriveRun(__id: i32): void{" + dispatchArms + "}");
+
+    // The host-called module-level export, sharing one box-lifetime instance via
+    // a module-level singleton (mirrors the daemon `scheduled_tick`).
+    let instVar = "__toilDeriveInstance";
+    this.injectTopLevelStatements(declaration,
+      "// @ts-ignore: injected derive entry (materialized-view runner)\n" +
+      "let " + instVar + ": " + className + " | null = null;\n");
+    this.injectTopLevelStatements(declaration,
+      "export function derive_run(__derive_id: i32): i64{" +
+      "let __inst = " + instVar + ";" +
+      "if (__inst == null){__inst = new " + className + "();" + instVar + " = __inst;}" +
+      "__inst.__deriveRun(__derive_id);return 0;}\n");
   }
 
   /**

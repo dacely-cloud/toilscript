@@ -1401,6 +1401,71 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
   return w.toBytes();
 }
 
+class DeriveEntry {
+  deriveId: i32 = 0;
+  dbName: string = "";
+  methodName: string = "";
+}
+
+/** Build the `toildb.derives` section bytes, or `null` if no `@database` class
+ *  declares a `@derive` materializer. The section wires each `@derive` method to
+ *  the database class that owns it, so the host runner can, after a write to one
+ *  of a database's source collections, re-run that database's derives (each
+ *  recomputes + `view.publish`es its materialized view). Per-derive `derive_id`
+ *  is assigned in `@derive` source-declaration order WITHIN its class, matching
+ *  the `derive_run(derive_id)` dispatcher synthesized by `injectDeriveHandler`
+ *  1:1. Format (LE):
+ *
+ *    u16 format_version = 1
+ *    u16 n_derives
+ *    per derive:
+ *      u16 derive_id          (declaration order within its @database class)
+ *      str db_name            (the @database class name; the write -> derive key)
+ *      str method_name        (the @derive method, for diagnostics)
+ */
+export function buildToilDbDerives(program: Program): Uint8Array | null {
+  let sources = program.sources;
+  let derives = new Array<DeriveEntry>();
+  for (let i = 0, k = sources.length; i < k; ++i) {
+    let source = sources[i];
+    if (source.isLibrary) continue;
+    let statements = source.statements;
+    for (let j = 0, l = statements.length; j < l; ++j) {
+      let statement = statements[j];
+      if (statement.kind != NodeKind.ClassDeclaration) continue;
+      let cls = <ClassDeclaration>statement;
+      if (!hasDeco(cls.decorators, DecoratorKind.Database)) continue;
+      let dbName = cls.name.text;
+      let members = cls.members;
+      let deriveIndex = 0;
+      for (let m = 0, mk = members.length; m < mk; ++m) {
+        let member = members[m];
+        if (member.kind != NodeKind.MethodDeclaration) continue;
+        let method = <MethodDeclaration>member;
+        if (!hasDeco(method.decorators, DecoratorKind.Derive)) continue;
+        let entry = new DeriveEntry();
+        entry.deriveId = deriveIndex;
+        entry.dbName = dbName;
+        entry.methodName = method.name.text;
+        derives.push(entry);
+        ++deriveIndex;
+      }
+    }
+  }
+  if (derives.length == 0) return null;
+
+  let w = new CatWriter();
+  w.u16(1);                            // format_version
+  w.u16(derives.length);               // n_derives
+  for (let i = 0, k = derives.length; i < k; ++i) {
+    let entry = derives[i];
+    w.u16(entry.deriveId);
+    w.str(entry.dbName);
+    w.str(entry.methodName);
+  }
+  return w.toBytes();
+}
+
 /** True if the (non-library) sources declare ANY Toil surface decorator
  *  (`@rest`/`@stream`/`@daemon`/`@scheduled`/`@database`/`@data`). Used to keep a
  *  bare AssemblyScript module (none of these) free of a `toil.surface` section in
