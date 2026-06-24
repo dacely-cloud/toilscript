@@ -138,13 +138,14 @@ declare function channel(target: Object, propertyKey: string | symbol, descripto
 // the compiler/runtime provides the real classes; declared here so `@stream`
 // handler signatures type-check in any editor.
 
-/** The connection-open context passed to `@connect`. Read-only. */
+/** The connection-open context passed to `@connect`. Read-only; the host writes it (stream id +
+ *  transport + the upgrade authority/path) into the box before the hook fires. Mirrors the real
+ *  injected `@global class StreamInbound` exactly: `authority()` and `path()` are METHODS. */
 declare class StreamInbound {
-  get connectionId(): u64;
-  get streamName(): string;
-  get remoteIp(): string;
-  get path(): string;
-  header(name: string): string;
+  get streamId(): u64;
+  get transport(): i32;
+  authority(): string;
+  path(): string;
 }
 
 /** The accept/reject + optional first-frame decision returned by
