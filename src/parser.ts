@@ -3124,6 +3124,7 @@ export class Parser extends DiagnosticEmitter {
     return [
       "// @ts-ignore: injected stream ring runtime (spec 05 sections 5-6)",
       "const __TOIL_STREAM_CAP: i32 = 131072;",
+      "const __TOIL_STREAM_MAX_FRAME: i32 = 65536;", // spec MAX_STREAM_FRAME_LEN (10 6.1) = 64 KiB / frame; matches the host
       "const __toilStreamIngress: StaticArray<u8> = new StaticArray<u8>(32 + __TOIL_STREAM_CAP);",
       "const __toilStreamEgress: StaticArray<u8> = new StaticArray<u8>(32 + __TOIL_STREAM_CAP);",
       "let __toilStreamConnId: u64 = 0;",
@@ -3153,10 +3154,11 @@ export class Parser extends DiagnosticEmitter {
       "  static reject(reason: u16): StreamOutbound { let c: i32 = <i32>reason; if (c < 0x0200 || c > 0x02FF) c = 0x0208; return new StreamOutbound(0, c); }",
       "  static reply(body: Uint8Array): StreamOutbound {",
       "    let n: i32 = body.length;",
-      "    if (n < 0 || n > (__TOIL_STREAM_CAP - 12)) return new StreamOutbound(0, 0x0205);",
+      "    if (n < 0 || n > __TOIL_STREAM_MAX_FRAME) return new StreamOutbound(0, 0x0205);",
       "    let b = changetype<usize>(__toilStreamEgress); let rg = b + 32;",
       "    let w = load<u32>(b + 12); let r = load<u32>(b + 16);",
       "    if (r == w) { w = 0; store<u32>(b + 12, 0); store<u32>(b + 16, 0); }",
+      "    if (w + 12 + <u32>n > <u32>__TOIL_STREAM_CAP) return new StreamOutbound(0, 0x0203);", // cumulative egress fit: no OOB on a 2nd+ reply in one dispatch
       "    let f = rg + <usize>w;",
       "    store<u8>(f, 1); store<u8>(f + 1, 1); store<u16>(f + 2, 0); store<u32>(f + 4, <u32>n); store<u32>(f + 8, 0);",
       "    if (n > 0) memory.copy(f + 12, body.dataStart, <usize>n);",
