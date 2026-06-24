@@ -191,8 +191,7 @@ function jsonOfExpr(typeName: string, valueExpr: string): string {
 
 /**
  * Value read from a JSON node for a @data field. 64-bit reads are string-lenient inside
- * the JSON lib itself; the 128/256-bit reads accept the decimal string plus the legacy
- * limb-array shape (little-endian 64-bit limbs) older writers emitted.
+ * the JSON lib itself; 128/256-bit reads use the same decimal-string JSON shape.
  */
 function jsonReadExpr(typeName: string, jsonExpr: string): string {
   switch (typeName) {
@@ -201,10 +200,10 @@ function jsonReadExpr(typeName: string, jsonExpr: string): string {
     case "i8": case "i16": case "i32": case "i64": return "<" + typeName + ">" + jsonExpr + ".asI64()";
     case "f32": case "f64": return "<" + typeName + ">" + jsonExpr + ".asF64()";
     case "string": return jsonExpr + ".asString()";
-    case "u128": return "(" + jsonExpr + ".isArray() ? new u128(" + jsonExpr + ".at(0).asU64()," + jsonExpr + ".at(1).asU64()) : u128.fromString(" + jsonExpr + ".asString()))";
-    case "i128": return "(" + jsonExpr + ".isArray() ? new i128(" + jsonExpr + ".at(0).asU64()," + jsonExpr + ".at(1).asI64()) : i128.fromString(" + jsonExpr + ".asString()))";
-    case "u256": return "(" + jsonExpr + ".isArray() ? new u256(" + jsonExpr + ".at(0).asU64()," + jsonExpr + ".at(1).asU64()," + jsonExpr + ".at(2).asU64()," + jsonExpr + ".at(3).asU64()) : u256.fromString(" + jsonExpr + ".asString()))";
-    case "i256": return "(" + jsonExpr + ".isArray() ? new i256(" + jsonExpr + ".at(0).asI64()," + jsonExpr + ".at(1).asI64()," + jsonExpr + ".at(2).asI64()," + jsonExpr + ".at(3).asI64()) : i256.fromString(" + jsonExpr + ".asString()))";
+    case "u128": return "u128.fromString(" + jsonExpr + ".asString())";
+    case "i128": return "i128.fromString(" + jsonExpr + ".asString())";
+    case "u256": return "u256.fromString(" + jsonExpr + ".asString())";
+    case "i256": return "i256.fromString(" + jsonExpr + ".asString())";
     default: return typeName + ".fromJSON(" + jsonExpr + ")";
   }
 }

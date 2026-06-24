@@ -430,19 +430,15 @@ function readOne(typeName: string): string {
 /**
  * TS expression coercing one parsed-JSON value to its `@data` field type. 64-bit-and-up
  * integers arrive as decimal strings (exact at any size; `BigInt("...")` revives them).
- * 128/256-bit values go through `__toilUnlimb`, which also accepts the legacy
- * limb-array shape older servers emitted (`BigInt()` alone throws on an array).
  */
 function jsonReviveScalar(typeName: string, access: string, dataNames: Set<string>): string {
   switch (typeName) {
     case "u8": case "u16": case "u32":
     case "i8": case "i16": case "i32":
     case "f32": case "f64": return "Number(" + access + " ?? 0)";
-    case "u64": case "i64": return "BigInt(" + access + " ?? 0)";
-    case "u128": return "__toilUnlimb(" + access + ", 2, false)";
-    case "i128": return "__toilUnlimb(" + access + ", 2, true)";
-    case "u256": return "__toilUnlimb(" + access + ", 4, false)";
-    case "i256": return "__toilUnlimb(" + access + ", 4, true)";
+    case "u64": case "i64":
+    case "u128": case "i128":
+    case "u256": case "i256": return "__toilBigInt(" + access + ")";
     case "bool": case "boolean": return "Boolean(" + access + ")";
     case "string": return "String(" + access + " ?? \"\")";
     case "Uint8Array": return "Uint8Array.from(Array.isArray(" + access + ") ? " + access + " : [])";
@@ -482,18 +478,10 @@ function jsonSendNeedsTransform(typeName: string, dataNames: Set<string>): bool 
 }
 
 /** The bignum revive helper, emitted once into the generated module. */
-function emitLimbHelpers(): string {
-  let out = "// 64-bit-and-up integers cross the JSON wire as decimal strings (exact through\n";
-  out += "// JSON.parse at any size). Older servers emitted 128/256-bit values as little-endian\n";
-  out += "// arrays of 64-bit limbs instead; the array branch revives those.\n";
-  out += "function __toilUnlimb(v: any, n: number, signedTop: boolean): bigint {\n";
-  out += "    if (!Array.isArray(v)) { try { return BigInt(v ?? 0); } catch { return 0n; } }\n";
-  out += "    let r = 0n;\n";
-  out += "    for (let i = 0; i < n; i++) {\n";
-  out += "        let limb = 0n; try { limb = BigInt(v[i] ?? 0); } catch {}\n";
-  out += "        r += (i === n - 1 && signedTop ? BigInt.asIntN(64, limb) : BigInt.asUintN(64, limb)) << BigInt(64 * i);\n";
-  out += "    }\n";
-  out += "    return r;\n";
+function emitBignumHelpers(): string {
+  let out = "// 64-bit-and-up integers cross the JSON wire as decimal strings.\n";
+  out += "function __toilBigInt(v: any): bigint {\n";
+  out += "    try { return BigInt(v ?? 0); } catch { return 0n; }\n";
   out += "}\n";
   return out;
 }
@@ -872,7 +860,7 @@ export function buildServerModule(program: Program, runtime: string): string | n
 
   if (surface.data.length) {
     out += "import { DataWriter, DataReader } from \"" + runtime + "\";\n\n";
-    out += emitLimbHelpers();
+    out += emitBignumHelpers();
     out += "\n";
   }
 

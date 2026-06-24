@@ -119,7 +119,7 @@ function decodeCatalog(p) {
     const str = () => { const n = u32(); const s = p.toString("latin1", pos, pos + n); pos += n; return s; };
     const colls = [];
     const version = u16();
-    if (version !== 2) fail(`expected toildb.catalog version 2, got ${version}`);
+    if (version !== 1) fail(`expected toildb.catalog version 1, got ${version}`);
     const ndb = u16();
     for (let d = 0; d < ndb; d++) {
         str(); const nc = u16();
