@@ -28,6 +28,11 @@
     "description": "Toil compile surface mode: 'hot' (request/stream) or 'cold' (daemon). Omit for the legacy single-artifact build.",
     "type": "s"
   },
+  "noConfigEntries": {
+    "category": "General",
+    "description": "Ignore the toilconfig 'entries' array and compile ONLY the entry files given on the command line. Used by the toiljs multi-artifact build, which hands each pass (request/stream/daemon) its own entry subset.",
+    "type": "b"
+  },
 
   "optimize": {
     "category": "Optimization",

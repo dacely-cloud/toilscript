@@ -242,12 +242,13 @@ export async function main(argv, options) {
   // Load additional options from toilconfig.json
   const seenToilconfig = new Set();
   seenToilconfig.add(configPath);
-  // Positional entry files OVERRIDE config `entries`: the toiljs multi-artifact build hands each
-  // pass (request / stream / daemon) its OWN entry subset on the command line, so appending
-  // config.entries would cross-contaminate the passes (e.g. a `*.stream.ts` entry leaking into the
-  // cold daemon pass and pulling a @stream class under --targetMode cold). Fall back to
-  // config.entries only when NO entry file was given on the command line.
-  const hadPositionalEntries = argv.length > 0;
+  // The toiljs multi-artifact build hands each pass (request / stream / daemon) its OWN entry
+  // subset on the command line and passes --noConfigEntries, so the toilconfig `entries` are NOT
+  // also appended (which would cross-contaminate the passes, e.g. a *.stream.ts entry leaking a
+  // @stream class into the cold --targetMode cold daemon pass). By DEFAULT config.entries are
+  // appended to any positional entries (so `toilscript app.ts` + a config listing shared globals
+  // compiles both - the toilconfig entry-points behaviour).
+  const skipConfigEntries = !!opts.noConfigEntries;
   const target = opts.target || "release";
   while (config) {
     // Merge target first
@@ -263,8 +264,8 @@ export async function main(argv, options) {
       opts = optionsUtil.merge(generated.options, opts, generalOptions, configDir);
     }
 
-    // Append entries (only when no positional entry files were given; positional overrides config).
-    if (config.entries && !hadPositionalEntries) {
+    // Append entries (unless --noConfigEntries was given; see skipConfigEntries above).
+    if (config.entries && !skipConfigEntries) {
       for (let entry of config.entries) {
         argv.push(optionsUtil.resolvePath(entry, configDir));
       }
