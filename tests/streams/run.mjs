@@ -112,6 +112,17 @@ class Gate {
 export function probe(): i32 { return 1; }
 `, "hot");
 
+// E (audit): a ZERO-ARG @connect that returns a StreamOutbound is bridged - its accept/reject is
+// honored (not discarded as a no-op accept). Compiles; the dispatch emits .__encode() on the return.
+expectPass("hot: zero-arg @connect returning StreamOutbound is honored", `
+@stream
+class Gate {
+  @connect onConnect(): StreamOutbound { return StreamOutbound.reject(0x0208); }
+  @message onMessage(): void {}
+}
+export function probe(): i32 { return 1; }
+`, "hot");
+
 // Default request mode: an existing @rest controller compiles under null target mode.
 expectPass("default request: @rest controller still compiles", `
 @data
@@ -122,6 +133,17 @@ export function probe(): i32 { return 1; }
 `, null);
 
 // --- should-fail cases -------------------------------------------------------
+
+// D (audit): a @connect with an INVALID signature (here a StreamInbound param but a void return -
+// the author forgot to return StreamOutbound) is a HARD error (9014), not a silent no-op.
+expectFail("hot: @connect with an invalid signature is rejected", `
+@stream
+class Bad {
+  @connect onConnect(c: StreamInbound): void {}
+  @message onMessage(): void {}
+}
+export function probe(): i32 { return 1; }
+`, "hot", "invalid signature");
 
 // @scheduled (and @daemon) are forbidden in the hot request artifact.
 expectFail("hot: @scheduled forbidden", `

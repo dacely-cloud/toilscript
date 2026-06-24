@@ -1411,21 +1411,22 @@ class DeriveEntry {
  *  declares a `@derive` materializer. The section wires each `@derive` method to
  *  the database class that owns it, so the host runner can, after a write to one
  *  of a database's source collections, re-run that database's derives (each
- *  recomputes + `view.publish`es its materialized view). Per-derive `derive_id`
- *  is assigned in `@derive` source-declaration order WITHIN its class, matching
- *  the `derive_run(derive_id)` dispatcher synthesized by `injectDeriveHandler`
- *  1:1. Format (LE):
+ *  recomputes + `view.publish`es its materialized view). `derive_id` is assigned
+ *  globally in source-declaration order across every `@database` class, matching
+ *  the single module-level `derive_run(derive_id)` dispatcher synthesized by the
+ *  parser 1:1. Format (LE):
  *
  *    u16 format_version = 1
  *    u16 n_derives
  *    per derive:
- *      u16 derive_id          (declaration order within its @database class)
+ *      u16 derive_id          (global declaration order in the hot/default module)
  *      str db_name            (the @database class name; the write -> derive key)
  *      str method_name        (the @derive method, for diagnostics)
  */
 export function buildToilDbDerives(program: Program): Uint8Array | null {
   let sources = program.sources;
   let derives = new Array<DeriveEntry>();
+  let deriveIndex = 0;
   for (let i = 0, k = sources.length; i < k; ++i) {
     let source = sources[i];
     if (source.isLibrary) continue;
@@ -1437,7 +1438,6 @@ export function buildToilDbDerives(program: Program): Uint8Array | null {
       if (!hasDeco(cls.decorators, DecoratorKind.Database)) continue;
       let dbName = cls.name.text;
       let members = cls.members;
-      let deriveIndex = 0;
       for (let m = 0, mk = members.length; m < mk; ++m) {
         let member = members[m];
         if (member.kind != NodeKind.MethodDeclaration) continue;

@@ -362,6 +362,8 @@ export class Parser extends DiagnosticEmitter {
   toildbCodecClasses: Map<string, ClassDeclaration> = new Map();
   /** Guards `weaveDataMigrations` so it runs exactly once (before element creation). */
   toildbWoven: bool = false;
+  /** Guards `weaveDeriveHandlers` so the module-level `derive_run` export is emitted once. */
+  toildbDerivesWoven: bool = false;
   /** Current overridden module name. */
   currentModuleName: string | null = null;
   // TODO: Remove when multi-value feature will enable by default.
@@ -716,12 +718,84 @@ export class Parser extends DiagnosticEmitter {
     // Weave migrations here too, in case `initializeProgram` (which weaves before
     // element creation) was skipped; idempotent, so the earlier call wins.
     this.weaveDataMigrations();
+    this.weaveDeriveHandlers();
     this.backlog = [];
     this.seenlog.clear();
     this.donelog.clear();
     this.streamExportedSources.clear();
     this.dependees.clear();
     this.restImportedSources.clear();
+  }
+
+  /** Synthesize the hot/default module-level `derive_run(derive_id)` export for
+   *  `@database` classes with `@derive` methods. Runs before element creation
+   *  from `initializeProgram`, so generated members/exports are compiled as
+   *  ordinary program symbols. Cold artifacts intentionally do not export
+   *  request-path derive runners and do not emit `toildb.derives`. */
+  weaveDeriveHandlers(): void {
+    if (this.toildbDerivesWoven) return;
+    this.toildbDerivesWoven = true;
+    let options = this.options;
+    if (options != null && options.targetMode == "cold") return;
+
+    let firstDecl: ClassDeclaration | null = null;
+    let singletonDecls = "";
+    let dispatch = "";
+    let deriveId = 0;
+    let classIndex = 0;
+
+    for (let i = 0, k = this.sources.length; i < k; ++i) {
+      let source = this.sources[i];
+      if (source.isLibrary) continue;
+      let statements = source.statements;
+      for (let j = 0, l = statements.length; j < l; ++j) {
+        let statement = statements[j];
+        if (statement.kind != NodeKind.ClassDeclaration) continue;
+        let cls = <ClassDeclaration>statement;
+        if (!this.hasDecoratorKind(cls.decorators, DecoratorKind.Database)) continue;
+
+        let className = cls.name.text;
+        let members = cls.members;
+        let classDispatch = "";
+        let classHasDerive = false;
+        for (let m = 0, mk = members.length; m < mk; ++m) {
+          let member = members[m];
+          if (member.kind != NodeKind.MethodDeclaration) continue;
+          let method = <MethodDeclaration>member;
+          if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Derive)) continue;
+          let methodName = method.name.text;
+          if (!this.isVoidNoArgSignature(method.signature)) {
+            this.error(
+              DiagnosticCode.User_defined_0,
+              method.signature.range,
+              "ToilDB: @derive method '" + className + "." + methodName +
+                "' must take no arguments and return void."
+            );
+          }
+          classDispatch += "if(__id==" + deriveId.toString() + "){this." + methodName + "();return true;}";
+          if (firstDecl == null) firstDecl = cls;
+          classHasDerive = true;
+          ++deriveId;
+        }
+        if (!classHasDerive) continue;
+
+        this.injectClassMember(cls, "__deriveRun(__id:i32):bool{" + classDispatch + "return false;}");
+        let instVar = "__toilDeriveInstance" + classIndex.toString();
+        singletonDecls += "let " + instVar + ":" + className + "|null=null;\n";
+        dispatch += "if(__derive_id<" + deriveId.toString() + "){let __inst=" + instVar + ";" +
+          "if(__inst==null){__inst=new " + className + "();" + instVar + "=__inst;}" +
+          "if(__inst.__deriveRun(__derive_id))return 0;}\n";
+        ++classIndex;
+      }
+    }
+
+    if (firstDecl == null) return;
+    this.injectTopLevelStatements(firstDecl,
+      "// @ts-ignore: injected derive entries (materialized-view runner)\n" +
+      singletonDecls +
+      "export function derive_run(__derive_id:i32):i64{\n" +
+      dispatch +
+      "return -1;}\n");
   }
 
   // ---- ToilDB @migrate weaving (lazy, read-time schema migration; Phase 3b) ----
@@ -2598,7 +2672,8 @@ export class Parser extends DiagnosticEmitter {
           this.injectRestController(declaration, decorators[i]);
         } else if (dk == DecoratorKind.Database) {
           this.injectDatabaseBinding(declaration);
-          this.injectDeriveHandler(declaration);
+          // `derive_run` is woven once after all sources are parsed so multiple
+          // `@database` classes share one module-level export with global IDs.
         } else if (dk == DecoratorKind.Daemon) {
           this.injectDaemonHandler(declaration);
         } else if (dk == DecoratorKind.Stream) {
@@ -2831,59 +2906,6 @@ export class Parser extends DiagnosticEmitter {
   }
 
   /**
-   * Synthesizes the host-called `derive_run(derive_id)` entry for a `@database`
-   * class that declares one or more `@derive` materializer methods. The host
-   * (edge derive runner / dev runtime) invokes a derive AFTER a write to one of
-   * its source collections, under `FunctionKind=Derive`, so the derive body may
-   * scan (`events.latest`) and `view.publish` (both gated to Derive/Job by
-   * `dbKindAllows`). Each `@derive` method is assigned a `derive_id` in source
-   * declaration order, matching the `toildb.derives` catalog (section built by
-   * `buildToilDbDerives`) 1:1, exactly as `@scheduled`/`task_index` does for the
-   * daemon. A `@database` with no `@derive` method emits nothing (byte-identical
-   * to today). The single box-lifetime instance is kept in a module-level
-   * singleton, mirroring the daemon's `scheduled_tick` synthesis.
-   */
-  private injectDeriveHandler(declaration: ClassDeclaration): void {
-    let className = declaration.name.text;
-    let members = declaration.members;
-
-    let dispatchArms = "";
-    let deriveCount = 0;
-    for (let i = 0, k = members.length; i < k; ++i) {
-      let member = members[i];
-      if (member.kind != NodeKind.MethodDeclaration) continue;
-      let method = <MethodDeclaration>member;
-      if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Derive)) continue;
-      let methodName = method.name.text;
-      dispatchArms += (deriveCount == 0 ? "if" : "else if") +
-        " (__id == " + deriveCount.toString() + ") this." + methodName + "();";
-      ++deriveCount;
-    }
-
-    // A `@database` without any `@derive` materializer is the common case: emit
-    // no dispatcher and no export, so non-derive programs stay byte-identical.
-    if (deriveCount == 0) return;
-
-    // Per-derive dispatcher onto the class. `derive_id` indices are assigned in
-    // `@derive` source-declaration order and MUST equal the per-derive id of
-    // `toildb.derives`, so the host's `derive_run(derive_id)` maps 1:1.
-    this.injectClassMember(declaration,
-      "__deriveRun(__id: i32): void{" + dispatchArms + "}");
-
-    // The host-called module-level export, sharing one box-lifetime instance via
-    // a module-level singleton (mirrors the daemon `scheduled_tick`).
-    let instVar = "__toilDeriveInstance";
-    this.injectTopLevelStatements(declaration,
-      "// @ts-ignore: injected derive entry (materialized-view runner)\n" +
-      "let " + instVar + ": " + className + " | null = null;\n");
-    this.injectTopLevelStatements(declaration,
-      "export function derive_run(__derive_id: i32): i64{" +
-      "let __inst = " + instVar + ";" +
-      "if (__inst == null){__inst = new " + className + "();" + instVar + " = __inst;}" +
-      "__inst.__deriveRun(__derive_id);return 0;}\n");
-  }
-
-  /**
    * Synthesize the cold-artifact daemon entry for a `@daemon` class (spec 03
    * sections 5.2 / 5.6 / 5.7, Reconciliation Part 2 cold exports). Mirrors
    * `injectRestController`: it scans the class methods once (same source-order
@@ -3058,9 +3080,11 @@ export class Parser extends DiagnosticEmitter {
     let messageName: string | null = null;
     let closeName: string | null = null;
     let disconnectName: string | null = null;
-    // The recorded @message / @connect hook's parameter arity: 0 = zero-arg (legacy no-op call); 1 =
-    // the bridged form (@message `(StreamPacket): StreamOutbound`; @connect `(StreamInbound):
-    // StreamOutbound`). Spec 03 section 3.4 / 5.1, 05 section 4.4.
+    // The recorded @message / @connect hook's bridge form: 0 = zero-arg VOID (legacy no-op call); 1 =
+    // bridged WITH input (@message `(StreamPacket): StreamOutbound`; @connect `(StreamInbound):
+    // StreamOutbound`); 2 = a ZERO-ARG hook returning StreamOutbound (bridged, NO input - its
+    // accept/reject is honored, not discarded). A @connect that is none of these is an error (9014).
+    // Spec 03 section 3.4 / 5.1, 05 section 4.4.
     let messageArgc = 0;
     let connectArgc = 0;
     let hookCount = 0;
@@ -3080,8 +3104,8 @@ export class Parser extends DiagnosticEmitter {
       let zeroArg = method.signature.parameters.length == 0;
       for (let d = 0, dn = decos.length; d < dn; ++d) {
         switch (decos[d].decoratorKind) {
-          case DecoratorKind.Connect:    { if (connectName == null) { ++hookCount; if (zeroArg) { connectName = methodName; connectArgc = 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamInbound") && this.isNamedType(method.signature.returnType, "StreamOutbound")) { connectName = methodName; connectArgc = 1; } } break; }
-          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; if (zeroArg) { messageName = methodName; messageArgc = 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamPacket") && this.isNamedType(method.signature.returnType, "StreamOutbound")) { messageName = methodName; messageArgc = 1; } } break; }
+          case DecoratorKind.Connect:    { if (connectName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { connectName = methodName; connectArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamInbound") && outRet) { connectName = methodName; connectArgc = 1; } else { this.error(DiagnosticCode.Stream_connect_handler_0_has_an_invalid_signature, method.name.range, methodName); } } break; }
+          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { messageName = methodName; messageArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamPacket") && outRet) { messageName = methodName; messageArgc = 1; } } break; }
           case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
           case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
         }
@@ -3107,10 +3131,14 @@ export class Parser extends DiagnosticEmitter {
     let dispatchArms = "";
     if (connectName != null)    dispatchArms += (connectArgc == 1)
       ? ("if (__ev == 1) { return this." + connectName + "(new StreamInbound()).__encode(); }")
-      : ("if (__ev == 1) { this." + connectName + "(); return 0; }");
+      : (connectArgc == 2)
+        ? ("if (__ev == 1) { return this." + connectName + "().__encode(); }")
+        : ("if (__ev == 1) { this." + connectName + "(); return 0; }");
     if (messageName != null)    dispatchArms += (messageArgc == 1)
       ? ("if (__ev == 2) { return this." + messageName + "(new StreamPacket()).__encode(); }")
-      : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
+      : (messageArgc == 2)
+        ? ("if (__ev == 2) { return this." + messageName + "().__encode(); }")
+        : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
     if (closeName != null)      dispatchArms += "if (__ev == 3) { this." + closeName + "(); return 0; }";
     if (disconnectName != null) dispatchArms += "if (__ev == 4) { this." + disconnectName + "(); return 0; }";
     this.injectClassMember(declaration,
