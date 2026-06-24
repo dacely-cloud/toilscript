@@ -317,7 +317,7 @@ export async function main(argv, options) {
     case "never": uncheckedBehavior = 1; break;
     case "always": uncheckedBehavior = 2; break;
   }
-  // Resolve the Toil compile surface mode. Absent => null (legacy single artifact);
+  // Resolve the Toil compile surface mode. Absent => null (default request artifact);
   // an explicit value must be "hot" or "cold", else this is a CLI-level error before compile.
   let targetMode = null;
   if (opts.targetMode != null && String(opts.targetMode).length > 0) {

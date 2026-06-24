@@ -97,8 +97,8 @@ class Echo {
 export function probe(): i32 { return 1; }
 `, "hot");
 
-// Back-compat: an existing @rest controller still compiles under legacy (null) mode.
-expectPass("legacy: @rest controller still compiles", `
+// Default request mode: an existing @rest controller compiles under null target mode.
+expectPass("default request: @rest controller still compiles", `
 @data
 class Pong { msg: string = "pong"; }
 @rest
@@ -146,8 +146,8 @@ class Plain { @scheduled("1m") a(): void {} }
 export function probe(): i32 { return 1; }
 `, "cold", "only valid inside a '@daemon' class");
 
-// Legacy (null) mode rejects the new cold-only @daemon with the generic message.
-expectFail("legacy: @daemon rejected", `
+// Default request (null) mode rejects the cold-only @daemon with the generic message.
+expectFail("default request: @daemon rejected", `
 @daemon
 class Jobs { @scheduled("30s") tick(): void {} }
 export function probe(): i32 { return 1; }

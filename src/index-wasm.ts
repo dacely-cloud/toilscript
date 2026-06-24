@@ -142,7 +142,7 @@ export function setNoUnsafe(options: Options, noUnsafe: bool): void {
   options.noUnsafe = noUnsafe;
 }
 
-/** Sets the `targetMode` option ("hot", "cold", or null for legacy single-artifact). */
+/** Sets the `targetMode` option ("hot", "cold", or null for the default request artifact). */
 export function setTargetMode(options: Options, targetMode: string | null): void {
   options.targetMode = targetMode;
 }
