@@ -227,5 +227,6 @@
   "Scheduled requires a single string schedule argument.": 9010,
   "Scheduled spec '{0}' is not a valid interval or cron expression.": 9011,
   "Scheduled handler '{0}' must take no arguments and return void.": 9012,
-  "Stream scope must be a StreamScope enum member.": 9013
+  "Stream scope must be a StreamScope enum member.": 9013,
+  "Stream connect handler '{0}' has an invalid signature.": 9014
 }
