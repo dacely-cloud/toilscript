@@ -97,6 +97,21 @@ class Echo {
 export function probe(): i32 { return 1; }
 `, "hot");
 
+// The @connect bridge: a @connect taking a StreamInbound (the host-written connect-context view:
+// streamId/transport/authority/path) and returning a StreamOutbound accept/reject compiles (the
+// injected info block + StreamInbound reader, spec 05 4.4). accept()/reject() must type-check.
+expectPass("hot: @connect StreamInbound -> StreamOutbound bridge", `
+@stream
+class Gate {
+  @connect onConnect(c: StreamInbound): StreamOutbound {
+    if (c.path() == "/blocked") return StreamOutbound.reject(0x0208);
+    return StreamOutbound.accept();
+  }
+  @message onMessage(): void {}
+}
+export function probe(): i32 { return 1; }
+`, "hot");
+
 // Default request mode: an existing @rest controller compiles under null target mode.
 expectPass("default request: @rest controller still compiles", `
 @data

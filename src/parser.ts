@@ -2997,9 +2997,11 @@ export class Parser extends DiagnosticEmitter {
     let messageName: string | null = null;
     let closeName: string | null = null;
     let disconnectName: string | null = null;
-    // The recorded @message hook's parameter arity: 0 = zero-arg (legacy no-op call); 1 = the
-    // raw-bytes `StreamPacket` message bridge (spec 03 section 3.4 / 5.1).
+    // The recorded @message / @connect hook's parameter arity: 0 = zero-arg (legacy no-op call); 1 =
+    // the bridged form (@message `(StreamPacket): StreamOutbound`; @connect `(StreamInbound):
+    // StreamOutbound`). Spec 03 section 3.4 / 5.1, 05 section 4.4.
     let messageArgc = 0;
+    let connectArgc = 0;
     let hookCount = 0;
     for (let i = 0, k = members.length; i < k; ++i) {
       let member = members[i];
@@ -3008,15 +3010,16 @@ export class Parser extends DiagnosticEmitter {
       let decos = method.decorators;
       if (decos == null) continue;
       let methodName = method.name.text;
-      // @connect/@close/@disconnect call only their ZERO-ARG form (the StreamInbound/
-      // StreamConnectionEvent runtime is a later increment, spec 3.1/3.3); a param'd form stays
-      // recorded-present but no-op. @message is wired to the raw-bytes bridge ONLY when its signature
-      // is exactly `(StreamPacket): StreamOutbound`; a typed `message:` mode (the param is a @data
-      // class returning void) stays no-op, so `.__encode()` is never emitted on a void return.
+      // @close/@disconnect call only their ZERO-ARG form; a param'd form stays recorded-present but
+      // no-op. @message is wired to the raw-bytes bridge when its signature is exactly
+      // `(StreamPacket): StreamOutbound`, and @connect when it is `(StreamInbound): StreamOutbound`
+      // (the host writes the connect-info block + honors the StreamOutbound accept/reject, 05 4.4); a
+      // typed `message:` mode (the param is a @data class returning void) stays no-op, so `.__encode()`
+      // is never emitted on a void return.
       let zeroArg = method.signature.parameters.length == 0;
       for (let d = 0, dn = decos.length; d < dn; ++d) {
         switch (decos[d].decoratorKind) {
-          case DecoratorKind.Connect:    { if (connectName == null)    { ++hookCount; } if (zeroArg) connectName = methodName;    break; }
+          case DecoratorKind.Connect:    { if (connectName == null) { ++hookCount; if (zeroArg) { connectName = methodName; connectArgc = 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamInbound") && this.isNamedType(method.signature.returnType, "StreamOutbound")) { connectName = methodName; connectArgc = 1; } } break; }
           case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; if (zeroArg) { messageName = methodName; messageArgc = 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamPacket") && this.isNamedType(method.signature.returnType, "StreamOutbound")) { messageName = methodName; messageArgc = 1; } } break; }
           case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
           case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
@@ -3041,7 +3044,9 @@ export class Parser extends DiagnosticEmitter {
     // accept/empty/reply-staged-to-egress, a negative `-(0x10000 + 0x02xx)` for a reject); a 0-arg
     // @message and connect/close/disconnect are void and return 0.
     let dispatchArms = "";
-    if (connectName != null)    dispatchArms += "if (__ev == 1) { this." + connectName + "(); return 0; }";
+    if (connectName != null)    dispatchArms += (connectArgc == 1)
+      ? ("if (__ev == 1) { return this." + connectName + "(new StreamInbound()).__encode(); }")
+      : ("if (__ev == 1) { this." + connectName + "(); return 0; }");
     if (messageName != null)    dispatchArms += (messageArgc == 1)
       ? ("if (__ev == 2) { return this." + messageName + "(new StreamPacket()).__encode(); }")
       : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
@@ -3132,6 +3137,10 @@ export class Parser extends DiagnosticEmitter {
       "export function stream_ring_capacity(): i32 { return __TOIL_STREAM_CAP; }",
       "export function stream_egress_offset(): i32 { return <i32>changetype<usize>(__toilStreamEgress); }",
       "export function stream_egress_capacity(): i32 { return __TOIL_STREAM_CAP; }",
+      "const __TOIL_STREAM_INFO_CAP: i32 = 1024;", // @connect host-context block (stream_id + transport + authority + path)
+      "const __toilStreamInfo: StaticArray<u8> = new StaticArray<u8>(__TOIL_STREAM_INFO_CAP);",
+      "export function stream_info_offset(): i32 { return <i32>changetype<usize>(__toilStreamInfo); }",
+      "export function stream_info_capacity(): i32 { return __TOIL_STREAM_INFO_CAP; }",
       "// @ts-ignore: injected",
       "@global class StreamPacket {",
       "  private __p: usize = 0; private __n: i32 = 0;",
@@ -3144,6 +3153,17 @@ export class Parser extends DiagnosticEmitter {
       "  get length(): i32 { return this.__n; }",
       "  bytes(): Uint8Array { let o = new Uint8Array(this.__n); if (this.__n > 0) memory.copy(o.dataStart, this.__p, <usize>this.__n); return o; }",
       "  at(i: i32): u8 { return (i >= 0 && i < this.__n) ? load<u8>(this.__p + <usize>i) : 0; }",
+      "}",
+      "// @ts-ignore: injected; the @connect host-context view (spec 05 4.4 / 2.2). The host writes the",
+      "// info block before firing @connect: [u64 stream_id][u8 transport][u8 _][u16 auth_len][u16 path_len]",
+      "// [u16 _] then the authority + path UTF8 bytes at offset 16.",
+      "@global class StreamInbound {",
+      "  private __b: usize;",
+      "  constructor() { this.__b = changetype<usize>(__toilStreamInfo); }",
+      "  get streamId(): u64 { return load<u64>(this.__b); }",
+      "  get transport(): i32 { return <i32>load<u8>(this.__b + 8); }",
+      "  authority(): string { return String.UTF8.decodeUnsafe(this.__b + 16, <usize>load<u16>(this.__b + 10)); }",
+      "  path(): string { let al: usize = <usize>load<u16>(this.__b + 10); return String.UTF8.decodeUnsafe(this.__b + 16 + al, <usize>load<u16>(this.__b + 12)); }",
       "}",
       "// @ts-ignore: injected",
       "@global class StreamOutbound {",
