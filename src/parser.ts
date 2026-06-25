@@ -343,6 +343,8 @@ export class Parser extends DiagnosticEmitter {
   dependees: Map<string, Dependee> = new Map();
   /** Normalized paths whose `@rest` runtime import has already been injected. */
   restImportedSources: Set<string> = new Set();
+  /** Normalized paths whose `@service`/`@remote` RPC runtime import has already been injected. */
+  rpcImportedSources: Set<string> = new Set();
   /** Normalized paths whose `@stream` module-level registry + the single
    *  `stream_dispatch` export have already been emitted (a project may declare
    *  several `@stream` classes, but the export is emitted exactly once). */
@@ -725,6 +727,7 @@ export class Parser extends DiagnosticEmitter {
     this.streamExportedSources.clear();
     this.dependees.clear();
     this.restImportedSources.clear();
+    this.rpcImportedSources.clear();
   }
 
   /** Synthesize the hot/default module-level `derive_run(derive_id)` export for
@@ -810,6 +813,9 @@ export class Parser extends DiagnosticEmitter {
     if (this.toildbWoven) return; // run once, before program element creation
     this.toildbWoven = true;
     this.checkMigrationLocations();
+    // Wire @service/@remote RPC here too (before element creation), gated on @stream; idempotent via
+    // `toildbWoven` + `rpcImportedSources`.
+    this.weaveRpc();
     if (this.toildbCodecClasses.size == 0) return;
     // Field layouts of every @data value type, for the old-version hash.
     let layouts = new Map<string, FieldLayout[]>();
@@ -2679,6 +2685,8 @@ export class Parser extends DiagnosticEmitter {
         } else if (dk == DecoratorKind.Stream) {
           this.injectStreamHandler(declaration);
         }
+        // `@service` is woven in `weaveRpc` (alongside free `@remote`s), so ONE gating point can honor
+        // the `@stream` exclusion before element creation instead of half-injecting and crashing.
       }
     }
     return declaration;
@@ -2843,7 +2851,7 @@ export class Parser extends DiagnosticEmitter {
   }
 
   /** Parse synthesized top-level statements and append them to the class's source. */
-  private injectTopLevelStatements(declaration: ClassDeclaration, text: string): void {
+  private injectTopLevelStatements(declaration: Node, text: string): void {
     // Run through the real parse path so an injected `import` registers its
     // dependency against `currentSource` (the controller file) and the backlog.
     let userSource = declaration.range.source;
@@ -2903,6 +2911,183 @@ export class Parser extends DiagnosticEmitter {
     }
     this.injectTopLevelStatements(declaration,
       "__toilRest.register((__q: __toilReq): __toilResp | null => new " + className + "().__tryRoute(__q));\n");
+  }
+
+  /**
+   * Wire a `@service` class's `@remote` methods onto the global `Rpc` registry - the RPC mirror of
+   * `injectRestController`. Each method becomes an id-matched arm of a synthesized
+   * `__rpcDispatch(__id, __body)`: decode the positional args from the body, call the method on a FRESH
+   * instance (stateless, exactly like a `@rest` controller), encode the result. The id is FNV-1a of
+   * `"Class.method"` - the identical hash the generated client sends in the `toil-rpc` header, so the
+   * wire matches without the two sides sharing state. `DataReader`/`DataWriter` are ambient (std).
+   */
+  private injectService(declaration: ClassDeclaration): void {
+    let className = declaration.name.text;
+    let members = declaration.members;
+    let blocks = "";
+    let registers = "";
+    for (let i = 0, k = members.length; i < k; ++i) {
+      let member = members[i];
+      if (member.kind != NodeKind.MethodDeclaration) continue;
+      let method = <MethodDeclaration>member;
+      if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Remote)) continue;
+      let methodName = method.name.text;
+      let id = dataTypeId(className + "." + methodName).toString();
+      let params = method.signature.parameters;
+      let decode = "";
+      let callArgs = "";
+      for (let p = 0, pk = params.length; p < pk; ++p) {
+        let dest = "__a" + p.toString();
+        decode += this.rpcDecodeArg(params[p].type, dest, p);
+        callArgs += (p > 0 ? "," : "") + dest;
+      }
+      let retNode = method.signature.returnType;
+      let body = "const __r=new DataReader(__body);" + decode;
+      if (this.rpcIsVoid(retNode)) {
+        body += "this." + methodName + "(" + callArgs + ");return new Uint8Array(0);";
+      } else {
+        body += "const __res=this." + methodName + "(" + callArgs + ");const __w=new DataWriter();" +
+          this.rpcEncodeResult(retNode, "__res") + "return __w.toBytes();";
+      }
+      blocks += "if(__id==" + id + "){" + body + "}";
+      registers += "__toilRpc.register(" + id + ",(__b: Uint8Array): Uint8Array => new " + className +
+        "().__rpcDispatch(" + id + ",__b));\n";
+    }
+    if (blocks.length == 0) return; // no @remote methods -> nothing to wire
+
+    this.injectClassMember(declaration,
+      "__rpcDispatch(__id: u32, __body: Uint8Array): Uint8Array{" + blocks + "return new Uint8Array(0);}");
+
+    let runtime = this.restRuntimePath(declaration);
+    let key = declaration.range.source.normalizedPath;
+    if (!this.rpcImportedSources.has(key)) {
+      this.rpcImportedSources.add(key);
+      this.injectTopLevelStatements(declaration,
+        "import { Rpc as __toilRpc } from " + JSON.stringify(runtime) + ";\n");
+    }
+    this.injectTopLevelStatements(declaration, registers);
+  }
+
+  /** True if a return type node is `void` (no result is encoded). */
+  private rpcIsVoid(node: TypeNode | null): bool {
+    return node != null && node instanceof NamedTypeNode &&
+      (<NamedTypeNode>node).name.identifier.text == "void";
+  }
+
+  /** AS statements decoding one RPC arg of `typeNode` from `__r` into a fresh const `dest` (mirrors the
+   *  per-field decode in `injectDataCodec`: length-prefixed array, raw bytes, or scalar/@data). */
+  private rpcDecodeArg(typeNode: TypeNode | null, dest: string, idx: i32): string {
+    if (typeNode == null || !(typeNode instanceof NamedTypeNode)) return "const " + dest + "=0;";
+    let nt = <NamedTypeNode>typeNode;
+    let typeName = nt.name.identifier.text;
+    let typeArgs = nt.typeArguments;
+    if (typeName == "Array" && typeArgs != null && typeArgs.length == 1 && typeArgs[0] instanceof NamedTypeNode) {
+      let elem = (<NamedTypeNode>typeArgs[0]).name.identifier.text;
+      let c = "__c" + idx.toString();
+      let j = "__j" + idx.toString();
+      return "const " + dest + "=new Array<" + elem + ">();{const " + c + "=__r.readU32();for(let " + j +
+        ":u32=0;" + j + "<" + c + "&&__r.ok;++" + j + "){" + dest + ".push(" + dataReadExpr(elem) + ");}}";
+    }
+    if (typeName == "Uint8Array") return "const " + dest + "=__r.readBytes();";
+    return "const " + dest + "=" + dataReadExpr(typeName) + ";";
+  }
+
+  /** AS statements encoding the result `src` of `typeNode` into `__w`; `void` -> "" (mirrors the
+   *  per-field encode in `injectDataCodec`). */
+  private rpcEncodeResult(typeNode: TypeNode | null, src: string): string {
+    if (typeNode == null || !(typeNode instanceof NamedTypeNode)) return "";
+    let nt = <NamedTypeNode>typeNode;
+    let typeName = nt.name.identifier.text;
+    if (typeName == "void") return "";
+    let typeArgs = nt.typeArguments;
+    if (typeName == "Array" && typeArgs != null && typeArgs.length == 1 && typeArgs[0] instanceof NamedTypeNode) {
+      let elem = (<NamedTypeNode>typeArgs[0]).name.identifier.text;
+      return "__w.writeU32(<u32>" + src + ".length);for(let __k=0,__m=" + src + ".length;__k<__m;++__k){" +
+        dataWriteStmt(elem, src + "[__k]") + "}";
+    }
+    if (typeName == "Uint8Array") return "__w.writeBytes(" + src + ");";
+    return dataWriteStmt(typeName, src);
+  }
+
+  /**
+   * Wire `@service` classes and free `@remote` functions onto the global `Rpc` registry. Runs ONCE
+   * before element creation (via `weaveDataMigrations`). `@service` could be done at parse time, but
+   * folding both here gives a SINGLE place to honor the `@stream` gating: a project using `@stream`
+   * cannot declare `@service`/`@remote` (the 9003 diagnostic fires at element creation), so we must not
+   * half-inject first or the build crashes instead of reporting it.
+   */
+  private weaveRpc(): void {
+    if (this.projectHasStream()) return; // gated: let the 9003 diagnostic surface cleanly
+    let baseBacklog = this.backlog.length;
+    for (let i = 0, k = this.sources.length; i < k; ++i) {
+      let source = this.sources[i];
+      if (source.isLibrary) continue;
+      let stmts = source.statements;
+      for (let j = 0, l = stmts.length; j < l; ++j) {
+        let s = stmts[j];
+        if (s.kind == NodeKind.ClassDeclaration) {
+          let cls = <ClassDeclaration>s;
+          if (this.hasDecoratorKind(cls.decorators, DecoratorKind.Service)) this.injectService(cls);
+        } else if (s.kind == NodeKind.FunctionDeclaration) {
+          let fn = <FunctionDeclaration>s;
+          if (this.hasDecoratorKind(fn.decorators, DecoratorKind.Remote)) this.injectRemote(fn);
+        }
+      }
+    }
+    // `injectService`/`injectRemote`'s `import { Rpc }` re-queues the already-parsed runtime module onto
+    // the backlog after the parse loop that drains it has finished; the module is loaded, so its `Rpc`
+    // export resolves at compile regardless. Drop the spurious entries to keep finish()'s empty-backlog
+    // invariant.
+    if (this.backlog.length > baseBacklog) this.backlog.length = baseBacklog;
+  }
+
+  /** True if the program declares any `@stream` class (gates the RPC weave; see diagnostic 9003). */
+  private projectHasStream(): bool {
+    for (let i = 0, k = this.sources.length; i < k; ++i) {
+      let source = this.sources[i];
+      if (source.isLibrary) continue;
+      let stmts = source.statements;
+      for (let j = 0, l = stmts.length; j < l; ++j) {
+        let s = stmts[j];
+        if (s.kind == NodeKind.ClassDeclaration &&
+          this.hasDecoratorKind((<ClassDeclaration>s).decorators, DecoratorKind.Stream)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Inject the RPC dispatch fn + its registration for one free `@remote` function (id = FNV of the
+   *  bare function name, matching the generated client). */
+  private injectRemote(fn: FunctionDeclaration): void {
+    let fnName = fn.name.text;
+    let id = dataTypeId(fnName).toString();
+    let params = fn.signature.parameters;
+    let decode = "";
+    let callArgs = "";
+    for (let p = 0, pk = params.length; p < pk; ++p) {
+      let dest = "__a" + p.toString();
+      decode += this.rpcDecodeArg(params[p].type, dest, p);
+      callArgs += (p > 0 ? "," : "") + dest;
+    }
+    let retNode = fn.signature.returnType;
+    let dispatchName = "__toilRpcFn_" + fnName;
+    let body = "const __r=new DataReader(__body);" + decode;
+    if (this.rpcIsVoid(retNode)) {
+      body += fnName + "(" + callArgs + ");return new Uint8Array(0);";
+    } else {
+      body += "const __res=" + fnName + "(" + callArgs + ");const __w=new DataWriter();" +
+        this.rpcEncodeResult(retNode, "__res") + "return __w.toBytes();";
+    }
+    let runtime = this.restRuntimePath(fn);
+    let key = fn.range.source.normalizedPath;
+    if (!this.rpcImportedSources.has(key)) {
+      this.rpcImportedSources.add(key);
+      this.injectTopLevelStatements(fn,
+        "import { Rpc as __toilRpc } from " + JSON.stringify(runtime) + ";\n");
+    }
+    this.injectTopLevelStatements(fn,
+      "function " + dispatchName + "(__body: Uint8Array): Uint8Array{" + body + "}\n" +
+      "__toilRpc.register(" + id + "," + dispatchName + ");\n");
   }
 
   /**
@@ -3632,7 +3817,7 @@ export class Parser extends DiagnosticEmitter {
    * The module specifier to import the REST runtime from: reuse whatever path
    * this controller already imports a runtime symbol from, else the default.
    */
-  private restRuntimePath(declaration: ClassDeclaration): string {
+  private restRuntimePath(declaration: Node): string {
     let stmts = declaration.range.source.statements;
     for (let i = 0, k = stmts.length; i < k; ++i) {
       let st = stmts[i];
