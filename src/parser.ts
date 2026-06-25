@@ -3070,6 +3070,10 @@ export class Parser extends DiagnosticEmitter {
   private injectStreamHandler(declaration: ClassDeclaration): void {
     let className = declaration.name.text;
     let members = declaration.members;
+    // The @data message type named by `@stream({ message: SomeData })`, or "" for the raw-bytes
+    // default (F3). When set, a `@message(SomeData): StreamOutbound` hook receives the DECODED @data
+    // (the host delivers raw ring bytes either way; only the guest-visible arg differs, doc 03 2.5).
+    let messageType = this.streamMessageType(declaration);
 
     // Collect the lifecycle hooks in SOURCE DECLARATION ORDER, applying exactly
     // the same filter `streamHookMask` (dbcatalog.ts) uses (method member that
@@ -3105,7 +3109,7 @@ export class Parser extends DiagnosticEmitter {
       for (let d = 0, dn = decos.length; d < dn; ++d) {
         switch (decos[d].decoratorKind) {
           case DecoratorKind.Connect:    { if (connectName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { connectName = methodName; connectArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamInbound") && outRet) { connectName = methodName; connectArgc = 1; } else { this.error(DiagnosticCode.Stream_connect_handler_0_has_an_invalid_signature, method.name.range, methodName); } } break; }
-          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { messageName = methodName; messageArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamPacket") && outRet) { messageName = methodName; messageArgc = 1; } } break; }
+          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { messageName = methodName; messageArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && outRet) { if (this.isNamedType(method.signature.parameters[0].type, "StreamPacket")) { messageName = methodName; messageArgc = 1; } else if (messageType.length > 0 && this.isNamedType(method.signature.parameters[0].type, messageType)) { messageName = methodName; messageArgc = 3; } } } break; }
           case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
           case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
         }
@@ -3138,7 +3142,9 @@ export class Parser extends DiagnosticEmitter {
       ? ("if (__ev == 2) { return this." + messageName + "(new StreamPacket()).__encode(); }")
       : (messageArgc == 2)
         ? ("if (__ev == 2) { return this." + messageName + "().__encode(); }")
-        : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
+        : (messageArgc == 3)
+          ? ("if (__ev == 2) { return this." + messageName + "(" + messageType + ".decode(new StreamPacket().bytes())).__encode(); }")
+          : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
     if (closeName != null)      dispatchArms += "if (__ev == 3) { this." + closeName + "(); return 0; }";
     if (disconnectName != null) dispatchArms += "if (__ev == 4) { this." + disconnectName + "(); return 0; }";
     this.injectClassMember(declaration,
@@ -3197,6 +3203,28 @@ export class Parser extends DiagnosticEmitter {
     let named = <NamedTypeNode>node;
     if (named.isNullable) return false;
     return named.name.identifier.text == name;
+  }
+
+  /** The `@data` message type named by `@stream({ message: SomeData })`, or "" for the raw-bytes
+   *  default (F3 / doc 03 section 2.5). Mirrors `buildToilStreamCatalog`'s `identField(objA, "message")`. */
+  private streamMessageType(declaration: ClassDeclaration): string {
+    let decos = declaration.decorators;
+    if (decos == null) return "";
+    for (let i = 0, k = decos.length; i < k; ++i) {
+      if (decos[i].decoratorKind != DecoratorKind.Stream) continue;
+      let args = decos[i].args;
+      if (args == null || args.length == 0) return "";
+      if (!(args[0] instanceof ObjectLiteralExpression)) return "";
+      let obj = <ObjectLiteralExpression>args[0];
+      for (let j = 0, n = obj.names.length; j < n; ++j) {
+        if (obj.names[j].text == "message") {
+          let v = obj.values[j];
+          return v instanceof IdentifierExpression ? (<IdentifierExpression>v).text : "";
+        }
+      }
+      return "";
+    }
+    return "";
   }
 
   /**
