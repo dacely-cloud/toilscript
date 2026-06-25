@@ -799,6 +799,79 @@ function emitRestClient(surface: RpcSurface, dataNames: Set<string>): string {
   return out;
 }
 
+/**
+ * Emits one async client method body (indented) for a `@remote` callable: encode the positional args
+ * into a `DataWriter`, POST them to `/__toil_rpc` with the FNV method id, then decode the @data /
+ * scalar / array result (or nothing for `void`). The DataWriter/DataReader method names are identical
+ * in toiljs/io (here) and toilscript/std (the server-side `@rpcDispatch`), so the wire matches.
+ */
+function emitRpcMethod(indent: string, name: string, c: RpcCallable, id: u32, dataNames: Set<string>): string {
+  let bi = indent + "    ";
+  let out = indent + "async " + name + "(" + paramList(c.params, dataNames) + "): Promise<" + tsType(c.returns, dataNames) + "> {\n";
+  out += bi + "const __w = new DataWriter();\n";
+  for (let i = 0, k = c.params.length; i < k; ++i) {
+    let p = c.params[i];
+    let suffix = methodSuffix(p.ref.type);
+    if (p.ref.array) {
+      let one = suffix.length ? "__w.write" + suffix + "(" + p.name + "[__i])" : p.name + "[__i].encodeInto(__w)";
+      out += bi + "__w.writeU32(" + p.name + ".length);\n";
+      out += bi + "for (let __i = 0, __n = " + p.name + ".length; __i < __n; __i++) " + one + ";\n";
+    } else {
+      out += bi + (suffix.length ? "__w.write" + suffix + "(" + p.name + ");" : p.name + ".encodeInto(__w);") + "\n";
+    }
+  }
+  out += bi + "const __out = await __toilRpcCall(" + id.toString() + ", __w.toBytes());\n";
+  if (c.returns.type == "void") {
+    out += bi + "return;\n";
+  } else {
+    let suffix = methodSuffix(c.returns.type);
+    out += bi + "const __r = new DataReader(__out);\n";
+    if (c.returns.array) {
+      let elemTs = mapName(c.returns.type, dataNames);
+      let one = suffix.length ? "__r.read" + suffix + "()" : c.returns.type + ".decodeFrom(__r)";
+      out += bi + "const __res: " + elemTs + "[] = [];\n";
+      out += bi + "for (let __i = 0, __n = __r.readU32(); __i < __n && __r.ok; __i++) __res.push(" + one + ");\n";
+      out += bi + "return __res;\n";
+    } else {
+      out += bi + "return " + (suffix.length ? "__r.read" + suffix + "()" : c.returns.type + ".decodeFrom(__r)") + ";\n";
+    }
+  }
+  out += indent + "},\n";
+  return out;
+}
+
+/**
+ * Emits the working RPC client (attached to `globalThis.__toilRpc` so the toiljs `Server` proxy can
+ * surface `Server.<service>.<method>()` and a free `Server.<remote>()`). "" when none are declared.
+ * Keyed exactly like `emitServerSurface`: `serviceKey(name)` for a service, the bare name for a remote.
+ */
+function emitRpcClient(surface: RpcSurface, dataNames: Set<string>): string {
+  if (surface.services.length == 0 && surface.remotes.length == 0) return "";
+  let out = "// Generated RPC client: `Server.<service>.<method>(args)` and free `Server.<remote>(args)`.\n";
+  out += "async function __toilRpcCall(__id: number, __body: Uint8Array): Promise<Uint8Array> {\n";
+  out += "    const __res = await fetch(\"/__toil_rpc\", { method: \"POST\", headers: { \"content-type\": \"application/octet-stream\", \"toil-rpc\": String(__id) }, body: __body });\n";
+  out += "    if (!__res.ok) throw new Error(`toiljs RPC ${__res.status}`);\n";
+  out += "    return new Uint8Array(await __res.arrayBuffer());\n";
+  out += "}\n\n";
+  out += "const __toilRpc: Record<string, any> = {\n";
+  for (let i = 0, k = surface.remotes.length; i < k; ++i) {
+    let r = surface.remotes[i];
+    out += emitRpcMethod("    ", r.name, r, dataTypeId(r.name), dataNames);
+  }
+  for (let i = 0, k = surface.services.length; i < k; ++i) {
+    let s = surface.services[i];
+    out += "    " + serviceKey(s.name) + ": {\n";
+    for (let m = 0, mk = s.methods.length; m < mk; ++m) {
+      let method = s.methods[m];
+      out += emitRpcMethod("        ", method.name, method, dataTypeId(s.name + "." + method.name), dataNames);
+    }
+    out += "    },\n";
+  }
+  out += "};\n";
+  out += "if (typeof globalThis !== \"undefined\") (globalThis as any).__toilRpc = __toilRpc;\n";
+  return out;
+}
+
 /** Emits the `globalThis.__toilStream = makeStreamClient({...})` attach for the `@stream` classes
  *  (doc 08 8.2), mirroring the `__toilRest` attach. The `Server.Stream` proxy (toiljs `rpc.ts`)
  *  surfaces it; the class name keys the channel and the value is its mount route. */
@@ -824,7 +897,7 @@ function emitStreamClient(surface: RpcSurface): string {
 /** Emits the `declare global { const Server: {...} }` ambient client surface. */
 function emitServerSurface(surface: RpcSurface, dataNames: Set<string>): string {
   let out = "declare global {\n";
-  out += "    /** The client-callable server surface. Calls ride toiljs RPC (transport TODO). */\n";
+  out += "    /** The client-callable server surface (REST fetch + RPC over /__toil_rpc + stream client). */\n";
   out += "    const Server: {\n";
   for (let i = 0, k = surface.remotes.length; i < k; ++i) {
     let r = surface.remotes[i];
@@ -934,9 +1007,9 @@ export function buildServerModule(program: Program, runtime: string): string | n
   out += "// The Server proxy + transport are provided by toiljs.\n\n";
 
   // Imports first (TS requires all imports before any statement).
-  if (surface.data.length) out += "import { DataWriter, DataReader } from \"" + runtime + "\";\n";
+  if (surface.data.length || surface.services.length || surface.remotes.length) out += "import { DataWriter, DataReader } from \"" + runtime + "\";\n";
   if (surface.streams.length) out += "import { makeStreamClient } from \"toiljs/client\";\n";
-  if (surface.data.length || surface.streams.length) out += "\n";
+  if (surface.data.length || surface.streams.length || surface.services.length || surface.remotes.length) out += "\n";
   if (surface.data.length) {
     out += emitBignumHelpers();
     out += "\n";
@@ -949,6 +1022,9 @@ export function buildServerModule(program: Program, runtime: string): string | n
 
   let restClient = emitRestClient(surface, dataNames);
   if (restClient.length) out += restClient + "\n";
+
+  let rpcClient = emitRpcClient(surface, dataNames);
+  if (rpcClient.length) out += rpcClient + "\n";
 
   let streamClient = emitStreamClient(surface);
   if (streamClient.length) out += streamClient + "\n";
