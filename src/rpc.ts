@@ -25,6 +25,7 @@ import {
   DecoratorNode,
   DecoratorKind,
   Expression,
+  IdentifierExpression,
   ObjectLiteralExpression,
   PropertyAccessExpression,
   StringLiteralExpression
@@ -75,7 +76,7 @@ interface RestRoute {
 interface RestController { name: string; key: string; routes: RestRoute[]; }
 
 /** A `@stream` class, for the typed client WebSocket channel (`Server.Stream.<className>.connect()`). */
-interface StreamEntry { className: string; route: string; }
+interface StreamEntry { className: string; route: string; messageType: string; }
 
 /** Everything client-visible, collected once from the user sources. */
 interface RpcSurface {
@@ -176,6 +177,18 @@ function streamRoute(deco: DecoratorNode, className: string): string {
     }
   }
   return "/" + declaredName;
+}
+
+/** The `@data` message type named by `@stream({ message: SomeData })`, or "" for the raw-bytes default
+ *  (doc 03 2.5). Mirrors `injectStreamHandler.streamMessageType` (parser.ts) so the client `send` encoder
+ *  and the server-side decode key the same type. */
+function streamMessageType(deco: DecoratorNode): string {
+  let args = deco.args;
+  if (args == null || args.length == 0) return "";
+  if (!(args[0] instanceof ObjectLiteralExpression)) return "";
+  let v = objectField(<ObjectLiteralExpression>args[0], "message");
+  if (v != null && v instanceof IdentifierExpression) return (<IdentifierExpression>v).text;
+  return "";
 }
 
 /** The `@route`/`@get`/... decorator on a method, or null. */
@@ -346,7 +359,7 @@ function collectClass(cls: ClassDeclaration, surface: RpcSurface): void {
   }
   let streamDeco = getDecorator(decorators, DecoratorKind.Stream);
   if (streamDeco != null) {
-    surface.streams.push({ className: cls.name.text, route: streamRoute(<DecoratorNode>streamDeco, cls.name.text) });
+    surface.streams.push({ className: cls.name.text, route: streamRoute(<DecoratorNode>streamDeco, cls.name.text), messageType: streamMessageType(<DecoratorNode>streamDeco) });
   }
 }
 
@@ -791,12 +804,20 @@ function emitRestClient(surface: RpcSurface, dataNames: Set<string>): string {
  *  surfaces it; the class name keys the channel and the value is its mount route. */
 function emitStreamClient(surface: RpcSurface): string {
   if (surface.streams.length == 0) return "";
-  let out = "if (typeof globalThis !== \"undefined\") (globalThis as any).__toilStream = makeStreamClient({\n";
+  let routes = "";
+  let encoders = "";
   for (let i = 0, k = surface.streams.length; i < k; ++i) {
     let s = surface.streams[i];
-    out += "    " + s.className + ": " + JSON.stringify(s.route) + ",\n";
+    routes += "    " + s.className + ": " + JSON.stringify(s.route) + ",\n";
+    // A typed `@stream({ message: T })` gets a per-class @data encoder so `send(msg)` lowers to
+    // `msg.encode()` (doc 03 2.5); a raw stream has no entry (the channel sends bytes as-is).
+    if (s.messageType.length > 0) {
+      encoders += "    " + s.className + ": (__m: " + s.messageType + "): Uint8Array => __m.encode(),\n";
+    }
   }
-  out += "});\n";
+  let out = "if (typeof globalThis !== \"undefined\") (globalThis as any).__toilStream = makeStreamClient({\n" + routes + "}";
+  if (encoders.length > 0) out += ", undefined, {\n" + encoders + "}";
+  out += ");\n";
   return out;
 }
 
@@ -837,7 +858,7 @@ function emitServerSurface(surface: RpcSurface, dataNames: Set<string>): string 
     out += "        readonly Stream: {\n";
     for (let i = 0, k = surface.streams.length; i < k; ++i) {
       let s = surface.streams[i];
-      out += "            readonly " + s.className + ": { connect(path?: string): Promise<import(\"toiljs/client\").StreamChannel> };\n";
+      out += "            readonly " + s.className + ": { connect(path?: string): Promise<import(\"toiljs/client\").StreamChannel" + (s.messageType.length > 0 ? "<" + s.messageType + ">" : "") + "> };\n";
     }
     out += "        };\n";
   }
