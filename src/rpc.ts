@@ -74,12 +74,17 @@ interface RestRoute {
 /** A `@rest` controller and its routes. */
 interface RestController { name: string; key: string; routes: RestRoute[]; }
 
+/** A `@stream` class, for the typed client WebSocket channel (`Server.Stream.<className>.connect()`). */
+interface StreamEntry { className: string; route: string; }
+
 /** Everything client-visible, collected once from the user sources. */
 interface RpcSurface {
   data: RpcData[];
   services: RpcService[];
   remotes: RpcCallable[];
   rest: RestController[];
+  /** The `@stream` classes (the typed WebSocket client surface). */
+  streams: StreamEntry[];
   /** The `@user` class name (the authenticated-user type), or null if none.
    *  At most one per program; drives the typed client `getUser()`. */
   userType: string | null;
@@ -149,6 +154,28 @@ function restClassStream(deco: DecoratorNode): string {
     if (s != null) return s;
   }
   return "JSON";
+}
+
+/** The `@stream` mount route (`"/" + declaredName`), mirroring `buildToilStreamCatalog`: the declared
+ *  name is the `@stream("name")` string arg (or `@stream({ name })`), else the class name. */
+function streamRoute(deco: DecoratorNode, className: string): string {
+  let declaredName = className;
+  let args = deco.args;
+  if (args != null && args.length > 0) {
+    if (args[0] instanceof StringLiteralExpression) {
+      let s = (<StringLiteralExpression>args[0]).value.trim();
+      if (s.startsWith("/")) s = s.substring(1);
+      if (s.length > 0) declaredName = s;
+    } else if (args[0] instanceof ObjectLiteralExpression) {
+      let nameV = objectField(<ObjectLiteralExpression>args[0], "name");
+      if (nameV != null && nameV instanceof StringLiteralExpression) {
+        let s = (<StringLiteralExpression>nameV).value.trim();
+        if (s.startsWith("/")) s = s.substring(1);
+        if (s.length > 0) declaredName = s;
+      }
+    }
+  }
+  return "/" + declaredName;
 }
 
 /** The `@route`/`@get`/... decorator on a method, or null. */
@@ -317,11 +344,15 @@ function collectClass(cls: ClassDeclaration, surface: RpcSurface): void {
     }
     if (routes.length) surface.rest.push({ name: cls.name.text, key: serviceKey(cls.name.text), routes });
   }
+  let streamDeco = getDecorator(decorators, DecoratorKind.Stream);
+  if (streamDeco != null) {
+    surface.streams.push({ className: cls.name.text, route: streamRoute(<DecoratorNode>streamDeco, cls.name.text) });
+  }
 }
 
 /** Walks the user (non-library) sources of `program` for the client-visible surface. */
 function collectSurface(program: Program): RpcSurface {
-  let surface: RpcSurface = { data: [], services: [], remotes: [], rest: [], userType: null };
+  let surface: RpcSurface = { data: [], services: [], remotes: [], rest: [], streams: [], userType: null };
   let sources = program.sources;
   for (let i = 0, k = sources.length; i < k; ++i) {
     let source = sources[i];
@@ -755,6 +786,20 @@ function emitRestClient(surface: RpcSurface, dataNames: Set<string>): string {
   return out;
 }
 
+/** Emits the `globalThis.__toilStream = makeStreamClient({...})` attach for the `@stream` classes
+ *  (doc 08 8.2), mirroring the `__toilRest` attach. The `Server.Stream` proxy (toiljs `rpc.ts`)
+ *  surfaces it; the class name keys the channel and the value is its mount route. */
+function emitStreamClient(surface: RpcSurface): string {
+  if (surface.streams.length == 0) return "";
+  let out = "if (typeof globalThis !== \"undefined\") (globalThis as any).__toilStream = makeStreamClient({\n";
+  for (let i = 0, k = surface.streams.length; i < k; ++i) {
+    let s = surface.streams[i];
+    out += "    " + s.className + ": " + JSON.stringify(s.route) + ",\n";
+  }
+  out += "});\n";
+  return out;
+}
+
 /** Emits the `declare global { const Server: {...} }` ambient client surface. */
 function emitServerSurface(surface: RpcSurface, dataNames: Set<string>): string {
   let out = "declare global {\n";
@@ -784,6 +829,15 @@ function emitServerSurface(surface: RpcSurface, dataNames: Set<string>): string 
         out += "                " + ctrl.routes[m].name + "(" + sig.argsParam + "): " + sig.ret + ";\n";
       }
       out += "            };\n";
+    }
+    out += "        };\n";
+  }
+  if (surface.streams.length) {
+    out += "        /** Generated WebSocket client for the `@stream` classes (doc 08 8.2). */\n";
+    out += "        readonly Stream: {\n";
+    for (let i = 0, k = surface.streams.length; i < k; ++i) {
+      let s = surface.streams[i];
+      out += "            readonly " + s.className + ": { connect(path?: string): Promise<import(\"toiljs/client\").StreamChannel> };\n";
     }
     out += "        };\n";
   }
@@ -846,7 +900,7 @@ function emitAuthClient(userType: string): string {
  */
 export function buildServerModule(program: Program, runtime: string): string | null {
   let surface = collectSurface(program);
-  if (surface.data.length == 0 && surface.services.length == 0 && surface.remotes.length == 0 && surface.rest.length == 0) {
+  if (surface.data.length == 0 && surface.services.length == 0 && surface.remotes.length == 0 && surface.rest.length == 0 && surface.streams.length == 0) {
     return null;
   }
 
@@ -858,8 +912,11 @@ export function buildServerModule(program: Program, runtime: string): string | n
   out += "// Working @data codec + the typed client-callable Server surface.\n";
   out += "// The Server proxy + transport are provided by toiljs.\n\n";
 
+  // Imports first (TS requires all imports before any statement).
+  if (surface.data.length) out += "import { DataWriter, DataReader } from \"" + runtime + "\";\n";
+  if (surface.streams.length) out += "import { makeStreamClient } from \"toiljs/client\";\n";
+  if (surface.data.length || surface.streams.length) out += "\n";
   if (surface.data.length) {
-    out += "import { DataWriter, DataReader } from \"" + runtime + "\";\n\n";
     out += emitBignumHelpers();
     out += "\n";
   }
@@ -871,6 +928,9 @@ export function buildServerModule(program: Program, runtime: string): string | n
 
   let restClient = emitRestClient(surface, dataNames);
   if (restClient.length) out += restClient + "\n";
+
+  let streamClient = emitStreamClient(surface);
+  if (streamClient.length) out += streamClient + "\n";
 
   if (surface.userType != null) out += emitAuthClient(<string>surface.userType) + "\n";
 
