@@ -3100,16 +3100,17 @@ export class Parser extends DiagnosticEmitter {
       if (decos == null) continue;
       let methodName = method.name.text;
       // @close/@disconnect call only their ZERO-ARG form; a param'd form stays recorded-present but
-      // no-op. @message is wired to the raw-bytes bridge when its signature is exactly
-      // `(StreamPacket): StreamOutbound`, and @connect when it is `(StreamInbound): StreamOutbound`
-      // (the host writes the connect-info block + honors the StreamOutbound accept/reject, 05 4.4); a
-      // typed `message:` mode (the param is a @data class returning void) stays no-op, so `.__encode()`
-      // is never emitted on a void return.
+      // no-op. @message accepts the zero-arg form, the raw `(StreamPacket)` bridge, OR the typed
+      // `(MessageType)` bridge when `@stream({ message: MessageType })` declares it (doc 03 2.5) - each
+      // with a `StreamOutbound` reply OR a `void` return (no reply). Any other signature is a hard error
+      // (9015), mirroring @connect's 9014 (`(StreamInbound): StreamOutbound`), so a typo or a missing
+      // `message:` declaration never silently no-ops. The host writes the connect-info block + honors the
+      // StreamOutbound accept/reject (05 4.4).
       let zeroArg = method.signature.parameters.length == 0;
       for (let d = 0, dn = decos.length; d < dn; ++d) {
         switch (decos[d].decoratorKind) {
           case DecoratorKind.Connect:    { if (connectName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { connectName = methodName; connectArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamInbound") && outRet) { connectName = methodName; connectArgc = 1; } else { this.error(DiagnosticCode.Stream_connect_handler_0_has_an_invalid_signature, method.name.range, methodName); } } break; }
-          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { messageName = methodName; messageArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && outRet) { if (this.isNamedType(method.signature.parameters[0].type, "StreamPacket")) { messageName = methodName; messageArgc = 1; } else if (messageType.length > 0 && this.isNamedType(method.signature.parameters[0].type, messageType)) { messageName = methodName; messageArgc = 3; } } } break; }
+          case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); let mParams = method.signature.parameters; if (zeroArg) { messageName = methodName; messageArgc = outRet ? 2 : 0; } else if (mParams.length == 1 && this.isNamedType(mParams[0].type, "StreamPacket")) { messageName = methodName; messageArgc = outRet ? 1 : 5; } else if (mParams.length == 1 && messageType.length > 0 && this.isNamedType(mParams[0].type, messageType)) { messageName = methodName; messageArgc = outRet ? 3 : 4; } else { this.error(DiagnosticCode.Stream_message_handler_0_has_an_invalid_signature, method.name.range, methodName); } } break; }
           case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
           case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
         }
@@ -3129,22 +3130,26 @@ export class Parser extends DiagnosticEmitter {
     // Synthesize the per-event dispatcher onto the class. `__ev` is the canonical
     // Part 2 event_kind (1 connect / 2 message / 3 close / 4 disconnect); 0 and
     // any unknown value are rejected host-side before dispatch and fall through
-    // here to a no-op `return 0`. A 1-param @message carries a packed-i64 via `__encode` (0 for
-    // accept/empty/reply-staged-to-egress, a negative `-(0x10000 + 0x02xx)` for a reject); a 0-arg
-    // @message and connect/close/disconnect are void and return 0.
+    // here to a no-op `return 0`. A @message returning StreamOutbound carries a packed-i64 via
+    // `__encode` (0 for accept/empty/reply-staged-to-egress, a negative `-(0x10000 + 0x02xx)` for a
+    // reject); a void @message (and connect/close/disconnect) returns 0.
     let dispatchArms = "";
     if (connectName != null)    dispatchArms += (connectArgc == 1)
       ? ("if (__ev == 1) { return this." + connectName + "(new StreamInbound()).__encode(); }")
       : (connectArgc == 2)
         ? ("if (__ev == 1) { return this." + connectName + "().__encode(); }")
         : ("if (__ev == 1) { this." + connectName + "(); return 0; }");
-    if (messageName != null)    dispatchArms += (messageArgc == 1)
-      ? ("if (__ev == 2) { return this." + messageName + "(new StreamPacket()).__encode(); }")
-      : (messageArgc == 2)
-        ? ("if (__ev == 2) { return this." + messageName + "().__encode(); }")
-        : (messageArgc == 3)
-          ? ("if (__ev == 2) { return this." + messageName + "(" + messageType + ".decode(new StreamPacket().bytes())).__encode(); }")
-          : ("if (__ev == 2) { this." + messageName + "(); return 0; }");
+    if (messageName != null) {
+      // The @message arg: none (0/2), the raw StreamPacket (1/5), or the decoded @data (3/4).
+      let msgArg = (messageArgc == 1 || messageArgc == 5) ? "new StreamPacket()"
+        : (messageArgc == 3 || messageArgc == 4) ? (messageType + ".decode(new StreamPacket().bytes())")
+        : "";
+      // Replies (returns StreamOutbound -> packed i64) vs void (no reply -> 0).
+      let msgReplies = messageArgc == 1 || messageArgc == 2 || messageArgc == 3;
+      dispatchArms += msgReplies
+        ? ("if (__ev == 2) { return this." + messageName + "(" + msgArg + ").__encode(); }")
+        : ("if (__ev == 2) { this." + messageName + "(" + msgArg + "); return 0; }");
+    }
     if (closeName != null)      dispatchArms += "if (__ev == 3) { this." + closeName + "(); return 0; }";
     if (disconnectName != null) dispatchArms += "if (__ev == 4) { this." + disconnectName + "(); return 0; }";
     this.injectClassMember(declaration,
