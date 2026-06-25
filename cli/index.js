@@ -706,6 +706,37 @@ export async function main(argv, options) {
     stats.parseTime += stats.end(begin);
   }
 
+  // Include @rest/@stream SURFACE-ONLY files: parsed so collectSurface (which walks all
+  // program.sources) folds their client surface into the emitted rpc module, but flagged non-entry
+  // so the compiler (which only emits UserEntry sources) never compiles them into this artifact's
+  // wasm. This lets the request pass emit the typed `Server.Stream` for a sibling stream tier's
+  // `@stream` classes without pulling that code into release.wasm.
+  if (opts.rpcSurfaceFiles != null && opts.rpcSurfaceFiles.length) {
+    for (let i = 0, k = opts.rpcSurfaceFiles.length; i < k; ++i) {
+      const filename = String(opts.rpcSurfaceFiles[i]);
+      let surfacePath = path.isAbsolute(filename)
+        ? path.relative(baseDir, filename)
+        : path.normalize(filename);
+      surfacePath = surfacePath
+        .replace(/\\/g, "/")
+        .replace(extension_re, "")
+        .replace(/\/$/, "");
+      let surfaceText = await readFile(surfacePath + extension, baseDir);
+      if (surfaceText == null) {
+        const idx = `${surfacePath}/index${extension}`;
+        surfaceText = await readFile(idx, baseDir);
+        if (surfaceText != null) surfacePath = idx;
+        else surfacePath += extension;
+      } else {
+        surfacePath += extension;
+      }
+      if (surfaceText != null) {
+        stats.parseCount++;
+        assemblyscript.parse(program, surfaceText, surfacePath, false); // surface only, NOT an entry
+      }
+    }
+  }
+
   // Auto-discover ToilDB migration files (the `migrations/<Type>.migration.ts`
   // convention): parse every `*.migration.ts` under baseDir so its `@migrate`
   // transforms + kept old `@data` shapes are in the program even though nothing

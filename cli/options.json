@@ -92,6 +92,12 @@
     "type": "s",
     "isPath": true
   },
+  "rpcSurfaceFiles": {
+    "category": "Output",
+    "description": "Files parsed for the rpc module's @rest/@stream client surface but NOT compiled into this artifact (folds a sibling tier's @stream classes into the Server surface).",
+    "type": "S",
+    "isPath": true
+  },
   "rpcRuntime": {
     "category": "Output",
     "description": "Import specifier for the DataWriter/DataReader codec in the emitted RPC module.",
