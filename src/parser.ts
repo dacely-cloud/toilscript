@@ -3026,8 +3026,8 @@ export class Parser extends DiagnosticEmitter {
    *       order), switches on `event_kind` (1 connect / 2 message / 3 close /
    *       4 disconnect, the FIXED Part 2 ABI values), and returns the hook's
    *       packed-i64 result (0 = no output / accept; a negative value is the
-   *       Part 3 reject/error bridge, wired with the real ring/StreamOutbound
-   *       runtime in a later increment).
+   *       Part 3 reject/error bridge `-(0x10000 + 0x02xx)`, lowered through the
+   *       real ring/StreamOutbound runtime via `__encode`).
    *
    * Each `@stream` class keeps its own MODULE-SINGLETON instance (a resident
    * per-connection box): the dispatch thunk constructs it on first use and REUSES
@@ -3055,13 +3055,14 @@ export class Parser extends DiagnosticEmitter {
    *
    * Only hooks the class actually declares get a dispatch arm; an event for an
    * absent hook falls through to `return 0` (a no-op success per the contract,
-   * never a crash). A hook that declares parameters (the typed `@message`
-   * `@data` arg, or a `StreamInbound`/`StreamPacket` view) is given a no-op arm
-   * here too: the `StreamInbound`/`StreamPacket`/`StreamOutbound` runtime + the
-   * ingress-ring read are owned by toiljs (spec 5.4) and land in a later
-   * increment, so this self-contained shim cannot synthesize those argument
-   * values yet; calling a zero-arg hook directly is the part that compiles and
-   * runs today (every gating/catalog fixture uses the zero-arg/void hook form).
+   * never a crash). Param'd hooks are fully wired through the injected ring
+   * runtime (`streamRuntimeSource`): `@connect(StreamInbound)` reads the host's
+   * connect-info block, `@message(StreamPacket)` drains the raw ingress frame, and
+   * `@message(MessageType)` decodes the frame into the `@data` class declared by
+   * `@stream({ message: MessageType })` (doc 03 2.5); each may reply with a
+   * `StreamOutbound` (lowered via `__encode`) or return `void`. An unrecognized
+   * `@message` / `@connect` signature is a hard error (9015 / 9014), never a
+   * silent no-op.
    *
    * Fires the 9013 warning for a `@stream` class with zero lifecycle hooks (a
    * hookless stream can never receive traffic), mirroring the daemon 9008 warning
