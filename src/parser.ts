@@ -1107,6 +1107,12 @@ export class Parser extends DiagnosticEmitter {
       if (s.kind == NodeKind.FunctionDeclaration || s.kind == NodeKind.MethodDeclaration) {
         let fn = <FunctionDeclaration>s;
         let kind = this.dbFunctionKind(fn.decorators);
+        // A @remote (RPC) with no explicit @query/@action defaults to READ-ONLY Query, so a DB write in
+        // it is a compile error - mirroring the runtime gate, which defaults a @remote to Query. @action
+        // keeps full write access.
+        if (kind == -1 && this.hasDecoratorKind(fn.decorators, DecoratorKind.Remote)) {
+          kind = DecoratorKind.Query;
+        }
         let body = fn.body;
         if (kind != -1 && body != null) this.walkDbStmt(body, kind, dbs);
       } else if (s.kind == NodeKind.NamespaceDeclaration) {
