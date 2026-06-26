@@ -383,8 +383,41 @@ class CatWriter {
     this.u32(hi);
   }
   str(s: string): void {
-    this.u32(<u32>s.length);
-    for (let i = 0, k = s.length; i < k; ++i) this.u8(s.charCodeAt(i) & 0xff);
+    // Real UTF-8 with a u32 BYTE-length prefix (NOT the UTF-16 code-unit count). The host decoders run
+    // `str::from_utf8` on these bytes, so the old Latin-1 `charCodeAt & 0xff` truncation of any non-ASCII
+    // name/route would fail the artifact closed with a misleading "not UTF-8". Encode manually (this
+    // compiler context has no String.UTF8 / TextEncoder); ASCII round-trips identically. Buffer first so
+    // the u32 prefix is the TRUE byte count.
+    let bytes: i32[] = [];
+    let i = 0;
+    let n = s.length;
+    while (i < n) {
+      let c = s.charCodeAt(i++);
+      if (c >= 0xd800 && c <= 0xdbff && i < n) {
+        let lo = s.charCodeAt(i);
+        if (lo >= 0xdc00 && lo <= 0xdfff) {
+          c = 0x10000 + ((c - 0xd800) << 10) + (lo - 0xdc00);
+          i++;
+        }
+      }
+      if (c < 0x80) {
+        bytes.push(c);
+      } else if (c < 0x800) {
+        bytes.push(0xc0 | (c >> 6));
+        bytes.push(0x80 | (c & 0x3f));
+      } else if (c < 0x10000) {
+        bytes.push(0xe0 | (c >> 12));
+        bytes.push(0x80 | ((c >> 6) & 0x3f));
+        bytes.push(0x80 | (c & 0x3f));
+      } else {
+        bytes.push(0xf0 | (c >> 18));
+        bytes.push(0x80 | ((c >> 12) & 0x3f));
+        bytes.push(0x80 | ((c >> 6) & 0x3f));
+        bytes.push(0x80 | (c & 0x3f));
+      }
+    }
+    this.u32(<u32>bytes.length);
+    for (let j = 0, k = bytes.length; j < k; ++j) this.u8(bytes[j]);
   }
   toBytes(): Uint8Array {
     let n = this.bytes.length;
