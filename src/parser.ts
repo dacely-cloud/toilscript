@@ -3061,6 +3061,7 @@ export class Parser extends DiagnosticEmitter {
    */
   private weaveRpc(): void {
     if (this.projectHasStream()) return; // gated: let the 9003 diagnostic surface cleanly
+    this.checkRpcSurfaceCollisions();
     let baseBacklog = this.backlog.length;
     for (let i = 0, k = this.sources.length; i < k; ++i) {
       let source = this.sources[i];
@@ -3082,6 +3083,61 @@ export class Parser extends DiagnosticEmitter {
     // export resolves at compile regardless. Drop the spurious entries to keep finish()'s empty-backlog
     // invariant.
     if (this.backlog.length > baseBacklog) this.backlog.length = baseBacklog;
+  }
+
+  /** Reject duplicate client-facing `Server` keys (two @services lowercasing to the same key, a free
+   *  @remote shadowing a @service / the reserved REST / Stream) and FNV method-id collisions, before the
+   *  surface is emitted - else the generated `Server` object/type silently overwrites a key, or a collided
+   *  id routes to the wrong method at dispatch. */
+  private checkRpcSurfaceCollisions(): void {
+    let keys = new Set<string>();
+    keys.add("REST");
+    keys.add("Stream");
+    let ids = new Map<u32, string>();
+    for (let i = 0, k = this.sources.length; i < k; ++i) {
+      let source = this.sources[i];
+      if (source.isLibrary) continue;
+      let stmts = source.statements;
+      for (let j = 0, l = stmts.length; j < l; ++j) {
+        let s = stmts[j];
+        if (s.kind == NodeKind.ClassDeclaration) {
+          let cls = <ClassDeclaration>s;
+          if (!this.hasDecoratorKind(cls.decorators, DecoratorKind.Service)) continue;
+          let cn = cls.name.text;
+          let key = cn.length ? cn.charAt(0).toLowerCase() + cn.substring(1) : cn;
+          if (keys.has(key)) {
+            this.error(DiagnosticCode.User_defined_0, cls.name.range,
+              "@service surface key '" + key + "' is already taken by another @service/@remote/REST/Stream; rename the service");
+          } else keys.add(key);
+          let members = cls.members;
+          for (let m = 0, mn = members.length; m < mn; ++m) {
+            let mem = members[m];
+            if (mem.kind != NodeKind.MethodDeclaration) continue;
+            let method = <MethodDeclaration>mem;
+            if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Remote)) continue;
+            let sym = cn + "." + method.name.text;
+            let id = dataTypeId(sym);
+            if (ids.has(id)) {
+              this.error(DiagnosticCode.User_defined_0, method.name.range,
+                "@remote '" + sym + "' has the same FNV method id as '" + ids.get(id) + "'; rename one to avoid an RPC dispatch collision");
+            } else ids.set(id, sym);
+          }
+        } else if (s.kind == NodeKind.FunctionDeclaration) {
+          let fn = <FunctionDeclaration>s;
+          if (!this.hasDecoratorKind(fn.decorators, DecoratorKind.Remote)) continue;
+          let fnName = fn.name.text;
+          if (keys.has(fnName)) {
+            this.error(DiagnosticCode.User_defined_0, fn.name.range,
+              "free @remote '" + fnName + "' collides with another Server surface key (@service/@remote/REST/Stream); rename it");
+          } else keys.add(fnName);
+          let id = dataTypeId(fnName);
+          if (ids.has(id)) {
+            this.error(DiagnosticCode.User_defined_0, fn.name.range,
+              "@remote '" + fnName + "' has the same FNV method id as '" + ids.get(id) + "'; rename one to avoid an RPC dispatch collision");
+          } else ids.set(id, fnName);
+        }
+      }
+    }
   }
 
   /** True if the program declares any `@stream` class (gates the RPC weave; see diagnostic 9003). */

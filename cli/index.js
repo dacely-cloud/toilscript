@@ -733,6 +733,10 @@ export async function main(argv, options) {
       if (surfaceText != null) {
         stats.parseCount++;
         assemblyscript.parse(program, surfaceText, surfacePath, false); // surface only, NOT an entry
+      } else {
+        // Surface file not found: parse `null` so DiagnosticCode.File_0_not_found is raised (mirrors the
+        // entry loop), instead of silently skipping a missing --rpcSurfaceFiles file.
+        assemblyscript.parse(program, null, surfacePath, false);
       }
     }
   }

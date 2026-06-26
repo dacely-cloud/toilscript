@@ -113,8 +113,8 @@ interface StreamOptions {
 }
 
 /** Marks a class as a stream protocol handler (runs on L2/L3 nodes). Its
- *  `@connect`/`@message`/`@close`/`@disconnect`/`@channel` methods are the
- *  lifecycle hooks. A project that uses `@stream` may NOT declare any `@service`
+ *  `@connect`/`@message`/`@close`/`@disconnect` methods are the live lifecycle
+ *  hooks. A project that uses `@stream` may NOT declare any `@service`
  *  or `@remote` anywhere (compiler-enforced). Hot/stream artifact only.
  *
  *  Three forms (mirroring `@rest`): bare `@stream` (the routing name is the class
@@ -126,13 +126,11 @@ declare function stream(options: StreamOptions): (target: Function) => void;
 
 /** Stream lifecycle-hook method decorators on a `@stream` class. `@connect` runs
  *  on open (returns `StreamOutbound`); `@message` handles an inbound packet;
- *  `@close` is a graceful close; `@disconnect` is an abrupt transport loss;
- *  `@channel` receives an opt-in fanned-out channel message. */
+ *  `@close` is a graceful close; `@disconnect` is an abrupt transport loss. */
 declare function connect(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function message(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function close(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function disconnect(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
-declare function channel(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 
 // Stream handler argument/return types. Ambient (like the bignum natives below):
 // the compiler/runtime provides the real classes; declared here so `@stream`
@@ -170,17 +168,6 @@ declare class StreamConnectionEvent {
  *  `bytes()` to retain. */
 declare class StreamPacket {
   get connectionId(): u64;
-  get length(): i32;
-  bytes(): Uint8Array;
-  at(i: i32): u8;
-}
-
-/** The fanned-out channel message passed to `@channel`: the channel name plus
- *  the raw published bytes (no decode). */
-declare class StreamChannelMessage {
-  get connectionId(): u64;
-  get channelHash(): u32;
-  get channelName(): string;
   get length(): i32;
   bytes(): Uint8Array;
   at(i: i32): u8;
