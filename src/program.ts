@@ -1524,20 +1524,19 @@ export class Program extends DiagnosticEmitter {
   }
 
   /**
-   * Enforces the project-wide rule that a compilation unit using `@stream` cannot also
-   * declare `@service` or `@remote` anywhere (spec 03 section 4.4). The host loads one
-   * `hot.wasm` whose surface is either a stream node or an RPC service node, never both,
-   * so mixing them is a deploy-time ambiguity caught fail-closed at compile time. Reported
-   * at the offending `@service`/`@remote` site. Skipped in cold mode (neither flag is
-   * admitted there anyway).
+   * Enforces that a SINGLE source (one emitted surface) cannot declare BOTH `@stream` AND
+   * `@service`/`@remote`: the host loads one artifact whose surface is either a stream node or an RPC
+   * service node, never both. `@stream` and `@service`/`@remote` DO coexist across separate tier files
+   * (main.ts vs main.stream.ts); only the same-source clash is the deploy-time ambiguity caught here.
+   * Reported at the offending `@service`/`@remote` site. Skipped in cold mode.
    */
   private enforceStreamServiceExclusion(): void {
     if (this.options.targetMode == "cold") return;
-    let hasStream = false;
-    let firstServiceOrRemote: DecoratorNode | null = null;
     for (let si = 0, sk = this.sources.length; si < sk; ++si) {
       let source = this.sources[si];
       if (source.sourceKind != SourceKind.UserEntry && source.sourceKind != SourceKind.User) continue;
+      let hasStream = false;
+      let firstServiceOrRemote: DecoratorNode | null = null;
       let statements = source.statements;
       for (let j = 0, l = statements.length; j < l; ++j) {
         let statement = statements[j];
@@ -1563,12 +1562,12 @@ export class Program extends DiagnosticEmitter {
           }
         }
       }
-    }
-    if (hasStream && firstServiceOrRemote != null) {
-      this.error(
-        DiagnosticCode.A_project_using_stream_cannot_declare_service_or_remote,
-        firstServiceOrRemote.range
-      );
+      if (hasStream && firstServiceOrRemote != null) {
+        this.error(
+          DiagnosticCode.A_project_using_stream_cannot_declare_service_or_remote,
+          firstServiceOrRemote.range
+        );
+      }
     }
   }
 
