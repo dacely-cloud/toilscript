@@ -204,10 +204,15 @@ declare function collection(options: CollectionOptions): (target: Object, proper
  *  compiler enforces the family x kind matrix (a `@query` calling `.patch` is a
  *  compile error). */
 declare function query(target: Function): void;
+declare function query(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function action(target: Function): void;
+declare function action(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function job(target: Function): void;
+declare function job(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function derive(target: Function): void;
+declare function derive(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 declare function admin(target: Function): void;
+declare function admin(target: Object, propertyKey: string | symbol, descriptor: TypedPropertyDescriptor<any>): void;
 
 // The ToilDB collection HANDLES are ambient globals (NO import, like the bignum
 // natives below) - the compiler provides them (`std/assembly/toildb`, `@global`);
