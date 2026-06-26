@@ -3055,17 +3055,20 @@ export class Parser extends DiagnosticEmitter {
   /**
    * Wire `@service` classes and free `@remote` functions onto the global `Rpc` registry. Runs ONCE
    * before element creation (via `weaveDataMigrations`). `@service` could be done at parse time, but
-   * folding both here gives a SINGLE place to honor the `@stream` gating: a project using `@stream`
-   * cannot declare `@service`/`@remote` (the 9003 diagnostic fires at element creation), so we must not
-   * half-inject first or the build crashes instead of reporting it.
+   * folding both here gives a SINGLE place to honor the same-source `@stream` rule: ONE source cannot
+   * declare both `@stream` and `@service`/`@remote`, so we SKIP the RPC weave for any source that also has
+   * a `@stream` - weaving it would half-inject an unresolvable import and crash instead of letting
+   * enforceStreamServiceExclusion report it. (`@stream` + `@service`/`@remote` DO coexist across tiers.)
    */
   private weaveRpc(): void {
-    if (this.projectHasStream()) return; // gated: let the 9003 diagnostic surface cleanly
     this.checkRpcSurfaceCollisions();
     let baseBacklog = this.backlog.length;
     for (let i = 0, k = this.sources.length; i < k; ++i) {
       let source = this.sources[i];
       if (source.isLibrary) continue;
+      // Skip a source that ALSO declares a `@stream`: the same-source `@stream` + `@service`/`@remote`
+      // clash (reported by enforceStreamServiceExclusion); weaving its RPC would half-inject and crash.
+      if (this.sourceHasStream(source)) continue;
       let stmts = source.statements;
       for (let j = 0, l = stmts.length; j < l; ++j) {
         let s = stmts[j];
@@ -3151,17 +3154,13 @@ export class Parser extends DiagnosticEmitter {
     }
   }
 
-  /** True if the program declares any `@stream` class (gates the RPC weave; see diagnostic 9003). */
-  private projectHasStream(): bool {
-    for (let i = 0, k = this.sources.length; i < k; ++i) {
-      let source = this.sources[i];
-      if (source.isLibrary) continue;
-      let stmts = source.statements;
-      for (let j = 0, l = stmts.length; j < l; ++j) {
-        let s = stmts[j];
-        if (s.kind == NodeKind.ClassDeclaration &&
-          this.hasDecoratorKind((<ClassDeclaration>s).decorators, DecoratorKind.Stream)) return true;
-      }
+  /** True if `source` declares any `@stream` class (the RPC weave skips such a source; diagnostic 9003). */
+  private sourceHasStream(source: Source): bool {
+    let stmts = source.statements;
+    for (let j = 0, l = stmts.length; j < l; ++j) {
+      let s = stmts[j];
+      if (s.kind == NodeKind.ClassDeclaration &&
+        this.hasDecoratorKind((<ClassDeclaration>s).decorators, DecoratorKind.Stream)) return true;
     }
     return false;
   }
