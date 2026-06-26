@@ -733,6 +733,76 @@ export function buildToilDbRouteKinds(program: Program): Uint8Array | null {
   return out;
 }
 
+/** Build the `toildb.rpc_kinds` section bytes, or `null` when no @remote needs the Action upgrade.
+ *  Unlike `route_kinds` (a DOWNGRADE list of explicit `@query` routes, with POST defaulting to Action),
+ *  an RPC method has no HTTP-method signal and defaults to READ-ONLY (Query). This section is therefore
+ *  the inverse - an UPGRADE list: the FNV ids of the `@action` `@remote`s the runtime must let WRITE.
+ *  Everything else (a plain `@remote` or an explicit `@query`) stays Query, so a read-only RPC can never
+ *  silently mutate the DB.
+ *
+ *  Wire format (LE):
+ *    u16 format_version = 1
+ *    u16 n_methods
+ *    per method:
+ *      u32 method_id      (FNV-1a of "ClassName.methodName" or "fnName", the `toil-rpc` header id)
+ *      u8  function_kind  (1 = Action)
+ */
+export function buildToilDbRpcKinds(program: Program): Uint8Array | null {
+  let ids = new Array<u32>();
+  let sources = program.sources;
+  for (let i = 0, k = sources.length; i < k; ++i) {
+    let source = sources[i];
+    if (source.isLibrary) continue;
+    let statements = source.statements;
+    for (let j = 0, l = statements.length; j < l; ++j) {
+      let statement = statements[j];
+      if (statement.kind == NodeKind.ClassDeclaration) {
+        let cls = <ClassDeclaration>statement;
+        if (decoOf(cls.decorators, DecoratorKind.Service) == null) continue;
+        let className = cls.name.text;
+        let members = cls.members;
+        for (let m = 0, mn = members.length; m < mn; ++m) {
+          let member = members[m];
+          if (member.kind != NodeKind.MethodDeclaration) continue;
+          let method = <MethodDeclaration>member;
+          if (decoOf(method.decorators, DecoratorKind.Remote) == null) continue;
+          let explicit = explicitRequestKind(method.decorators);
+          if (explicit > 1) {
+            program.error(DiagnosticCode.User_defined_0, method.name.range,
+              "@remote methods may only use @query or @action ToilDB function kinds (default is read-only @query)");
+          } else if (explicit == 1) {
+            ids.push(fnv1a(className + "." + method.name.text));
+          }
+        }
+      } else if (statement.kind == NodeKind.FunctionDeclaration) {
+        let fn = <FunctionDeclaration>statement;
+        if (decoOf(fn.decorators, DecoratorKind.Remote) == null) continue;
+        let explicit = explicitRequestKind(fn.decorators);
+        if (explicit > 1) {
+          program.error(DiagnosticCode.User_defined_0, fn.name.range,
+            "@remote functions may only use @query or @action ToilDB function kinds (default is read-only @query)");
+        } else if (explicit == 1) {
+          ids.push(fnv1a(fn.name.text));
+        }
+      }
+    }
+  }
+  if (ids.length == 0) return null;
+  let w = new CatWriter();
+  w.u16(1);
+  w.u16(ids.length);
+  for (let i = 0, k = ids.length; i < k; ++i) {
+    w.u32(ids[i]);
+    w.u8(1); // FunctionKind::Action
+  }
+  let out = w.toBytes();
+  if (out.length > TOILDB_ROUTE_KIND_MAX_SECTION_BYTES) {
+    program.error(DiagnosticCode.User_defined_0, null, "toildb.rpc_kinds section is too large");
+    return null;
+  }
+  return out;
+}
+
 function explicitRequestKind(decorators: DecoratorNode[] | null): i32 {
   if (decorators == null) return -1;
   for (let i = 0, k = decorators.length; i < k; ++i) {

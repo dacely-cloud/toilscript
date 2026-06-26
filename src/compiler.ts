@@ -23,6 +23,7 @@ import {
   buildToilDbCatalog,
   buildToilDbTypes,
   buildToilDbRouteKinds,
+  buildToilDbRpcKinds,
   buildToilSurface,
   buildToilStreamCatalog,
   buildToilDaemonCatalog,
@@ -839,6 +840,10 @@ export class Compiler extends DiagnosticEmitter {
       // mutating HTTP methods that the source declared read-only with `@query`.
       let routeKinds = buildToilDbRouteKinds(program);
       if (routeKinds != null) module.addCustomSection("toildb.route_kinds", routeKinds);
+      // RPC DB policy: the @action @remotes the runtime may let WRITE; everything else (a plain or
+      // @query @remote) defaults to read-only Query, so a read-only RPC can never silently mutate.
+      let rpcKinds = buildToilDbRpcKinds(program);
+      if (rpcKinds != null) module.addCustomSection("toildb.rpc_kinds", rpcKinds);
       // hot/default request: any @stream class -> toilstream.catalog.
       let streamCat = buildToilStreamCatalog(program);
       if (streamCat != null) module.addCustomSection("toilstream.catalog", streamCat);
