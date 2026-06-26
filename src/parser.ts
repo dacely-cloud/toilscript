@@ -2926,6 +2926,20 @@ export class Parser extends DiagnosticEmitter {
     let members = declaration.members;
     // `@auth` on the @service class guards EVERY @remote method on it (mirrors @rest classAuth).
     let classAuth = this.hasDecoratorKind(declaration.decorators, DecoratorKind.Auth);
+    // RPC news a fresh instance per call (like a @rest controller), so a @service must be
+    // default-constructible: a required-parameter constructor makes the injected `new Class()` fail.
+    for (let c = 0, ck = members.length; c < ck; ++c) {
+      let cm = members[c];
+      if (cm.kind != NodeKind.MethodDeclaration || (<MethodDeclaration>cm).name.text != "constructor") continue;
+      let cps = (<MethodDeclaration>cm).signature.parameters;
+      for (let cp = 0, cpk = cps.length; cp < cpk; ++cp) {
+        if (cps[cp].initializer == null) {
+          this.error(DiagnosticCode.User_defined_0, (<MethodDeclaration>cm).name.range,
+            "@service '" + className + "' must be default-constructible (RPC creates a fresh instance per call); give every constructor parameter a default or use field initializers");
+          break;
+        }
+      }
+    }
     let blocks = "";
     let registers = "";
     for (let i = 0, k = members.length; i < k; ++i) {
@@ -2934,6 +2948,16 @@ export class Parser extends DiagnosticEmitter {
       let method = <MethodDeclaration>member;
       if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Remote)) continue;
       let methodName = method.name.text;
+      if (method.is(CommonFlags.Static)) {
+        this.error(DiagnosticCode.User_defined_0, method.name.range,
+          "@remote is not valid on a static method ('" + className + "." + methodName + "'): an RPC call runs on a fresh instance");
+        continue;
+      }
+      if (method.is(CommonFlags.Private) || method.is(CommonFlags.Protected)) {
+        this.error(DiagnosticCode.User_defined_0, method.name.range,
+          "@remote method '" + className + "." + methodName + "' cannot be private/protected: an RPC endpoint is a public network surface");
+        continue;
+      }
       let id = dataTypeId(className + "." + methodName).toString();
       let params = method.signature.parameters;
       let decode = "";
@@ -3073,6 +3097,11 @@ export class Parser extends DiagnosticEmitter {
    *  bare function name, matching the generated client). */
   private injectRemote(fn: FunctionDeclaration): void {
     let fnName = fn.name.text;
+    if (fnName == "REST" || fnName == "Stream") {
+      this.error(DiagnosticCode.User_defined_0, fn.name.range,
+        "free @remote '" + fnName + "' collides with the reserved `Server." + fnName + "` surface; rename the function");
+      return;
+    }
     let id = dataTypeId(fnName).toString();
     let params = fn.signature.parameters;
     let decode = "";
