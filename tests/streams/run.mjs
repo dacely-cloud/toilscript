@@ -145,6 +145,26 @@ class Bad {
 export function probe(): i32 { return 1; }
 `, "hot", "invalid signature");
 
+// D (audit #2): a @close / @disconnect with a NON-zero-arg signature is a HARD error (9016 / 9017), not a
+// silent mask-without-dispatcher schism (the catalog bit was set but no dispatch arm was ever emitted).
+expectFail("hot: @close with an argument is rejected", `
+@stream
+class BadClose {
+  @message onMessage(): void {}
+  @close onClose(x: i32): void {}
+}
+export function probe(): i32 { return 1; }
+`, "hot", "invalid signature");
+
+expectFail("hot: @disconnect with an argument is rejected", `
+@stream
+class BadDisconnect {
+  @message onMessage(): void {}
+  @disconnect onDisconnect(x: i32): void {}
+}
+export function probe(): i32 { return 1; }
+`, "hot", "invalid signature");
+
 // @scheduled (and @daemon) are forbidden in the hot request artifact.
 expectFail("hot: @scheduled forbidden", `
 class NotADaemon {
