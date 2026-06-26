@@ -2924,6 +2924,8 @@ export class Parser extends DiagnosticEmitter {
   private injectService(declaration: ClassDeclaration): void {
     let className = declaration.name.text;
     let members = declaration.members;
+    // `@auth` on the @service class guards EVERY @remote method on it (mirrors @rest classAuth).
+    let classAuth = this.hasDecoratorKind(declaration.decorators, DecoratorKind.Auth);
     let blocks = "";
     let registers = "";
     for (let i = 0, k = members.length; i < k; ++i) {
@@ -2941,29 +2943,36 @@ export class Parser extends DiagnosticEmitter {
         decode += this.rpcDecodeArg(params[p].type, dest, p);
         callArgs += (p > 0 ? "," : "") + dest;
       }
+      // `@ratelimit` then `@auth` guards run BEFORE decode/call, mirroring the @rest emitter; each
+      // returns a Response (429 / 401) that the widened RpcFn (-> Response) surfaces via Rpc.dispatch.
+      let guards = this.ratelimitGuardOf(method);
+      if (classAuth || this.hasDecoratorKind(method.decorators, DecoratorKind.Auth)) {
+        guards += "if(!AuthService.hasSession()){return __toilRpcResp.text(\"unauthorized\\n\",401);}";
+      }
       let retNode = method.signature.returnType;
-      let body = "const __r=new DataReader(__body);" + decode;
+      let body = guards + "const __r=new DataReader(__body);" + decode;
       if (this.rpcIsVoid(retNode)) {
-        body += "this." + methodName + "(" + callArgs + ");return new Uint8Array(0);";
+        body += "this." + methodName + "(" + callArgs + ");return __toilRpcResp.bytes(new Uint8Array(0));";
       } else {
         body += "const __res=this." + methodName + "(" + callArgs + ");const __w=new DataWriter();" +
-          this.rpcEncodeResult(retNode, "__res") + "return __w.toBytes();";
+          this.rpcEncodeResult(retNode, "__res") + "return __toilRpcResp.bytes(__w.toBytes());";
       }
       blocks += "if(__id==" + id + "){" + body + "}";
-      registers += "__toilRpc.register(" + id + ",(__b: Uint8Array): Uint8Array => new " + className +
+      registers += "__toilRpc.register(" + id + ",(__b: Uint8Array): __toilRpcResp => new " + className +
         "().__rpcDispatch(" + id + ",__b));\n";
     }
     if (blocks.length == 0) return; // no @remote methods -> nothing to wire
 
     this.injectClassMember(declaration,
-      "__rpcDispatch(__id: u32, __body: Uint8Array): Uint8Array{" + blocks + "return new Uint8Array(0);}");
+      "__rpcDispatch(__id: u32, __body: Uint8Array): __toilRpcResp{" + blocks +
+      "return __toilRpcResp.internalError(\"rpc dispatch\");}");
 
     let runtime = this.restRuntimePath(declaration);
     let key = declaration.range.source.normalizedPath;
     if (!this.rpcImportedSources.has(key)) {
       this.rpcImportedSources.add(key);
       this.injectTopLevelStatements(declaration,
-        "import { Rpc as __toilRpc } from " + JSON.stringify(runtime) + ";\n");
+        "import { Rpc as __toilRpc, Response as __toilRpcResp } from " + JSON.stringify(runtime) + ";\n");
     }
     this.injectTopLevelStatements(declaration, registers);
   }
@@ -2985,8 +2994,11 @@ export class Parser extends DiagnosticEmitter {
       let elem = (<NamedTypeNode>typeArgs[0]).name.identifier.text;
       let c = "__c" + idx.toString();
       let j = "__j" + idx.toString();
+      // Uint8Array elements use readBytes: dataMethodSuffix has no Uint8Array case, so dataReadExpr
+      // would emit a non-existent Uint8Array.decodeFrom. Matches the client's writeBytes encode.
+      let elemRead = elem == "Uint8Array" ? "__r.readBytes()" : dataReadExpr(elem);
       return "const " + dest + "=new Array<" + elem + ">();{const " + c + "=__r.readU32();for(let " + j +
-        ":u32=0;" + j + "<" + c + "&&__r.ok;++" + j + "){" + dest + ".push(" + dataReadExpr(elem) + ");}}";
+        ":u32=0;" + j + "<" + c + "&&__r.ok;++" + j + "){" + dest + ".push(" + elemRead + ");}}";
     }
     if (typeName == "Uint8Array") return "const " + dest + "=__r.readBytes();";
     return "const " + dest + "=" + dataReadExpr(typeName) + ";";
@@ -3002,8 +3014,9 @@ export class Parser extends DiagnosticEmitter {
     let typeArgs = nt.typeArguments;
     if (typeName == "Array" && typeArgs != null && typeArgs.length == 1 && typeArgs[0] instanceof NamedTypeNode) {
       let elem = (<NamedTypeNode>typeArgs[0]).name.identifier.text;
+      let elemWrite = elem == "Uint8Array" ? "__w.writeBytes(" + src + "[__k]);" : dataWriteStmt(elem, src + "[__k]");
       return "__w.writeU32(<u32>" + src + ".length);for(let __k=0,__m=" + src + ".length;__k<__m;++__k){" +
-        dataWriteStmt(elem, src + "[__k]") + "}";
+        elemWrite + "}";
     }
     if (typeName == "Uint8Array") return "__w.writeBytes(" + src + ");";
     return dataWriteStmt(typeName, src);
@@ -3069,24 +3082,29 @@ export class Parser extends DiagnosticEmitter {
       decode += this.rpcDecodeArg(params[p].type, dest, p);
       callArgs += (p > 0 ? "," : "") + dest;
     }
+    // `@ratelimit` / `@auth` on the free @remote, mirroring the @service path (each returns a Response).
+    let guards = this.ratelimitGuardOf(fn);
+    if (this.hasDecoratorKind(fn.decorators, DecoratorKind.Auth)) {
+      guards += "if(!AuthService.hasSession()){return __toilRpcResp.text(\"unauthorized\\n\",401);}";
+    }
     let retNode = fn.signature.returnType;
     let dispatchName = "__toilRpcFn_" + fnName;
-    let body = "const __r=new DataReader(__body);" + decode;
+    let body = guards + "const __r=new DataReader(__body);" + decode;
     if (this.rpcIsVoid(retNode)) {
-      body += fnName + "(" + callArgs + ");return new Uint8Array(0);";
+      body += fnName + "(" + callArgs + ");return __toilRpcResp.bytes(new Uint8Array(0));";
     } else {
       body += "const __res=" + fnName + "(" + callArgs + ");const __w=new DataWriter();" +
-        this.rpcEncodeResult(retNode, "__res") + "return __w.toBytes();";
+        this.rpcEncodeResult(retNode, "__res") + "return __toilRpcResp.bytes(__w.toBytes());";
     }
     let runtime = this.restRuntimePath(fn);
     let key = fn.range.source.normalizedPath;
     if (!this.rpcImportedSources.has(key)) {
       this.rpcImportedSources.add(key);
       this.injectTopLevelStatements(fn,
-        "import { Rpc as __toilRpc } from " + JSON.stringify(runtime) + ";\n");
+        "import { Rpc as __toilRpc, Response as __toilRpcResp } from " + JSON.stringify(runtime) + ";\n");
     }
     this.injectTopLevelStatements(fn,
-      "function " + dispatchName + "(__body: Uint8Array): Uint8Array{" + body + "}\n" +
+      "function " + dispatchName + "(__body: Uint8Array): __toilRpcResp{" + body + "}\n" +
       "__toilRpc.register(" + id + "," + dispatchName + ");\n");
   }
 
@@ -3719,7 +3737,7 @@ export class Parser extends DiagnosticEmitter {
    * returns a `429` `Response` when over the limit, or `null` to proceed. A
    * malformed decorator yields `""` (no guard) rather than miscompiling.
    */
-  private ratelimitGuardOf(method: MethodDeclaration): string {
+  private ratelimitGuardOf(method: FunctionDeclaration): string {
     let decos = method.decorators;
     if (decos == null) return "";
     for (let i = 0, k = decos.length; i < k; ++i) {
