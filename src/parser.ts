@@ -3417,8 +3417,8 @@ export class Parser extends DiagnosticEmitter {
         switch (decos[d].decoratorKind) {
           case DecoratorKind.Connect:    { if (connectName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); if (zeroArg) { connectName = methodName; connectArgc = outRet ? 2 : 0; } else if (method.signature.parameters.length == 1 && this.isNamedType(method.signature.parameters[0].type, "StreamInbound") && outRet) { connectName = methodName; connectArgc = 1; } else { this.error(DiagnosticCode.Stream_connect_handler_0_has_an_invalid_signature, method.name.range, methodName); } } break; }
           case DecoratorKind.Message:    { if (messageName == null) { ++hookCount; let outRet = this.isNamedType(method.signature.returnType, "StreamOutbound"); let mParams = method.signature.parameters; if (zeroArg) { messageName = methodName; messageArgc = outRet ? 2 : 0; } else if (mParams.length == 1 && this.isNamedType(mParams[0].type, "StreamPacket")) { messageName = methodName; messageArgc = outRet ? 1 : 5; } else if (mParams.length == 1 && messageType.length > 0 && this.isNamedType(mParams[0].type, messageType)) { messageName = methodName; messageArgc = outRet ? 3 : 4; } else { this.error(DiagnosticCode.Stream_message_handler_0_has_an_invalid_signature, method.name.range, methodName); } } break; }
-          case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; } if (zeroArg) closeName = methodName;      break; }
-          case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; } if (zeroArg) disconnectName = methodName; break; }
+          case DecoratorKind.Close:      { if (closeName == null)      { ++hookCount; if (zeroArg) closeName = methodName;      else this.error(DiagnosticCode.Stream_close_handler_0_has_an_invalid_signature, method.name.range, methodName); } break; }
+          case DecoratorKind.Disconnect: { if (disconnectName == null) { ++hookCount; if (zeroArg) disconnectName = methodName; else this.error(DiagnosticCode.Stream_disconnect_handler_0_has_an_invalid_signature, method.name.range, methodName); } break; }
         }
       }
     }
