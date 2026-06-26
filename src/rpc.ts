@@ -851,6 +851,8 @@ function emitRpcClient(surface: RpcSurface, dataNames: Set<string>): string {
   out += "async function __toilRpcCall(__id: number, __body: Uint8Array): Promise<Uint8Array> {\n";
   out += "    const __res = await fetch(\"/__toil_rpc\", { method: \"POST\", headers: { \"content-type\": \"application/octet-stream\", \"toil-rpc\": String(__id) }, body: __body });\n";
   out += "    if (!__res.ok) throw new Error(`toiljs RPC ${__res.status}`);\n";
+  out += "    const __ct = __res.headers.get(\"content-type\") || \"\";\n";
+  out += "    if (!__ct.startsWith(\"application/octet-stream\")) throw new Error(`toiljs RPC: unexpected content-type '${__ct}' on a 200 (a proxy/HTML page, not an RPC result?)`);\n";
   out += "    return new Uint8Array(await __res.arrayBuffer());\n";
   out += "}\n\n";
   out += "const __toilRpc: Record<string, any> = {\n";
