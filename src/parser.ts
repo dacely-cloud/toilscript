@@ -3093,6 +3093,9 @@ export class Parser extends DiagnosticEmitter {
     let keys = new Set<string>();
     keys.add("REST");
     keys.add("Stream");
+    // @rest controllers live in their OWN nested namespace (Server.REST.<serviceKey>), distinct from the
+    // top-level Server.<service>/<remote> keys, so they collide only with each other (audit #9).
+    let restKeys = new Set<string>();
     let ids = new Map<u32, string>();
     for (let i = 0, k = this.sources.length; i < k; ++i) {
       let source = this.sources[i];
@@ -3102,25 +3105,33 @@ export class Parser extends DiagnosticEmitter {
         let s = stmts[j];
         if (s.kind == NodeKind.ClassDeclaration) {
           let cls = <ClassDeclaration>s;
-          if (!this.hasDecoratorKind(cls.decorators, DecoratorKind.Service)) continue;
           let cn = cls.name.text;
           let key = cn.length ? cn.charAt(0).toLowerCase() + cn.substring(1) : cn;
-          if (keys.has(key)) {
-            this.error(DiagnosticCode.User_defined_0, cls.name.range,
-              "@service surface key '" + key + "' is already taken by another @service/@remote/REST/Stream; rename the service");
-          } else keys.add(key);
-          let members = cls.members;
-          for (let m = 0, mn = members.length; m < mn; ++m) {
-            let mem = members[m];
-            if (mem.kind != NodeKind.MethodDeclaration) continue;
-            let method = <MethodDeclaration>mem;
-            if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Remote)) continue;
-            let sym = cn + "." + method.name.text;
-            let id = dataTypeId(sym);
-            if (ids.has(id)) {
-              this.error(DiagnosticCode.User_defined_0, method.name.range,
-                "@remote '" + sym + "' has the same FNV method id as '" + ids.get(id) + "'; rename one to avoid an RPC dispatch collision");
-            } else ids.set(id, sym);
+          if (this.hasDecoratorKind(cls.decorators, DecoratorKind.Service)) {
+            if (keys.has(key)) {
+              this.error(DiagnosticCode.User_defined_0, cls.name.range,
+                "@service surface key '" + key + "' is already taken by another @service/@remote/REST/Stream; rename the service");
+            } else keys.add(key);
+            let members = cls.members;
+            for (let m = 0, mn = members.length; m < mn; ++m) {
+              let mem = members[m];
+              if (mem.kind != NodeKind.MethodDeclaration) continue;
+              let method = <MethodDeclaration>mem;
+              if (!this.hasDecoratorKind(method.decorators, DecoratorKind.Remote)) continue;
+              let sym = cn + "." + method.name.text;
+              let id = dataTypeId(sym);
+              if (ids.has(id)) {
+                this.error(DiagnosticCode.User_defined_0, method.name.range,
+                  "@remote '" + sym + "' has the same FNV method id as '" + ids.get(id) + "'; rename one to avoid an RPC dispatch collision");
+              } else ids.set(id, sym);
+            }
+          } else if (this.hasDecoratorKind(cls.decorators, DecoratorKind.Rest)) {
+            // @rest controllers are keyed under Server.REST.<serviceKey(name)>; two whose names differ only
+            // by first-letter case fold to the same key and the second silently overwrites the first.
+            if (restKeys.has(key)) {
+              this.error(DiagnosticCode.User_defined_0, cls.name.range,
+                "@rest controller key '" + key + "' under Server.REST is already taken (two controllers whose names differ only by first-letter case collide); rename one");
+            } else restKeys.add(key);
           }
         } else if (s.kind == NodeKind.FunctionDeclaration) {
           let fn = <FunctionDeclaration>s;
