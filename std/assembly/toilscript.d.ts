@@ -295,9 +295,17 @@ declare class TenantStats {
 /** Per-domain analytics. `Analytics.self()` reads this site's own stats; the privileged
  *  `dacely.com` domain may read any site via `Analytics.site(domain)` (any other caller,
  *  or an unknown domain, gets `null`). The calling domain is decided host-side. */
+/** A page of site names from `Analytics.listSites` (dacely.com only). When `hasMore` is
+ *  true, pass the last `sites` entry back as the next call's cursor. */
+declare class SiteList {
+  sites: string[];
+  hasMore: bool;
+}
+
 declare class Analytics {
   static self(): TenantStats;
   static site(domain: string): TenantStats | null;
+  static listSites(cursor?: string, limit?: i32): SiteList;
 }
 
 // Big integers, native globals implemented in std/assembly/bignum. The

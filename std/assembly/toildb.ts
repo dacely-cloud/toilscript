@@ -450,6 +450,13 @@ export class TenantStats {
   reqDayCap: u64 = 0;
 }
 
+/// A page of site names from `Analytics.listSites` (dacely.com only). When `hasMore` is
+/// true, pass the last `sites` entry back as the next call's cursor.
+export class SiteList {
+  sites: string[] = [];
+  hasMore: bool = false;
+}
+
 /// Per-domain analytics. A site reads its OWN stats with `Analytics.self()`. The
 /// privileged `dacely.com` domain may read ANY site with `Analytics.site(domain)`; any
 /// other caller gets `null` for a cross-domain read (`null` is also an unknown domain).
@@ -485,6 +492,23 @@ export class Analytics {
     const status = analyticsHost.read(db.dataStart, db.byteLength);
     if (status < 0) return null;
     return Analytics.decode(__toildbTake(status));
+  }
+
+  /// Enumerate sites, paginated. ONLY `dacely.com` gets results; any other caller gets an
+  /// empty list. `cursor` is the previous page's last name (`""` = from the start); reads up
+  /// to `limit` names. When `hasMore` is true, pass the last `sites` entry as the next cursor.
+  static listSites(cursor: string = "", limit: i32 = 256): SiteList {
+    const cb = Uint8Array.wrap(String.UTF8.encode(cursor));
+    const out = new SiteList();
+    const status = analyticsHost.listSites(cb.dataStart, cb.byteLength, limit);
+    if (status < 0) return out;
+    const r = new DataReader(__toildbTake(status));
+    const count = r.readU32();
+    for (let i: u32 = 0; i < count; i++) {
+      out.sites.push(r.readString());
+    }
+    out.hasMore = r.readU8() != 0;
+    return out;
   }
 }
 
