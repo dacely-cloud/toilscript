@@ -5,11 +5,11 @@
 
 ## Why not an automated coverage tool
 
-`@btc-vision/as-pect` + `@btc-vision/as-covers` would print a percentage, but
-as-pect hard-codes the `@btc-vision/assemblyscript` compiler, which does not
-bundle the `JSON` global (only `toilscript` does). So the spec is compiled and
-run by `toilscript` directly, and coverage is established by an exhaustive,
-audited branch enumeration rather than a tool badge.
+Off-the-shelf AssemblyScript coverage tooling would print a percentage, but it
+hard-codes a stock `assemblyscript` compiler, which does not bundle the `JSON`
+global (only `toilscript` does). So the spec is compiled and run by `toilscript`
+directly, and coverage is established by an exhaustive, audited branch
+enumeration rather than a tool badge.
 
 ## Audit
 
