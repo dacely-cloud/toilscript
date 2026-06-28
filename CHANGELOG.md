@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.1.49] - 2026-06-28
+
+- Add the per-domain Analytics API: `Analytics.self()` / `Analytics.site(domain)` / `Analytics.listSites(cursor, limit)` — a site reads its own analytics; the `dacely.com` domain reads any site.
+- Harden the analytics frame decode against a truncated/corrupt frame (bound the count loops by the reader's `ok` flag).
+
 ## [v0.1.48] - 2026-06-26
 
 - No changes

@@ -467,7 +467,7 @@ export class Analytics {
     const stats = new TenantStats();
     r.readU16(); // frame version (currently 1)
     const count = r.readU32();
-    for (let i: u32 = 0; i < count; i++) {
+    for (let i: u32 = 0; i < count && r.ok; i++) {
       const name = r.readString();
       stats.lifetime.set(name, r.readI64());
     }
@@ -504,7 +504,7 @@ export class Analytics {
     if (status < 0) return out;
     const r = new DataReader(__toildbTake(status));
     const count = r.readU32();
-    for (let i: u32 = 0; i < count; i++) {
+    for (let i: u32 = 0; i < count && r.ok; i++) {
       out.sites.push(r.readString());
     }
     out.hasMore = r.readU8() != 0;
