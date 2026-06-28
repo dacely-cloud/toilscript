@@ -282,6 +282,24 @@ declare class Events<K, V> {
   latest(key: K, limit: i32): V[];
 }
 
+/** One tenant's analytics snapshot: per-metric lifetime totals + the request rate
+ *  windows (current usage paired with the plan cap; cap 0 = unlimited). */
+declare class TenantStats {
+  lifetime: Map<string, i64>;
+  reqMinuteUsed: i64;
+  reqMinuteCap: u64;
+  reqDayUsed: i64;
+  reqDayCap: u64;
+}
+
+/** Per-domain analytics. `Analytics.self()` reads this site's own stats; the privileged
+ *  `dacely.com` domain may read any site via `Analytics.site(domain)` (any other caller,
+ *  or an unknown domain, gets `null`). The calling domain is decided host-side. */
+declare class Analytics {
+  static self(): TenantStats;
+  static site(domain: string): TenantStats | null;
+}
+
 // Big integers, native globals implemented in std/assembly/bignum. The
 // arithmetic/bitwise/comparison operators
 // (+ - * / % & | ^ << >> == != < > <= >=) are operator overloads resolved by

@@ -273,3 +273,13 @@ export namespace toildbHost {
   @external("env", "data.write_allowed")
   export declare function writeAllowed(): i32;
 }
+
+// Per-domain analytics read. The host stashes a versioned little-endian TenantStats
+// frame in the SAME result buffer the `data.*` ops use, so the guest drains it with
+// `toildbHost.takeResult`. Returns the frame length (>= 0), -2 absent (no caller
+// context / unknown domain), -3 forbidden (a non-dacely caller asked for another domain).
+export namespace analyticsHost {
+  // @ts-ignore: decorator
+  @external("env", "analytics_read")
+  export declare function read(domainPtr: usize, domainLen: i32): i32;
+}

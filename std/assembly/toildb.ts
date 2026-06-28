@@ -13,8 +13,8 @@
 // static through a type parameter, but `instantiate<V>()` + `v.decodeInto(buf)`
 // works). Value types must be default-constructible.
 
-import { toildbHost } from "bindings/toildb";
-import { DataWriter } from "data";
+import { analyticsHost, toildbHost } from "bindings/toildb";
+import { DataReader, DataWriter } from "data";
 
 /// Resolve a `"<db>/<collection>"` name to its numeric host handle. Called once
 /// per collection at module init by the generated `App` binding.
@@ -435,6 +435,56 @@ export class Counter<K> {
   add(key: K, delta: i64): void {
     const kb = key.encode();
     toildbHost.counterAdd(this.__handle, kb.dataStart, kb.byteLength, delta, 0);
+  }
+}
+
+/// One tenant's analytics snapshot (the metering counters + plan limits), read via the
+/// `Analytics` API. `lifetime` holds the per-domain lifetime totals by metric name
+/// (`requests`, `bytes_served`, `status_2xx`.., `db_ops`, `stream_*`, ...); the request
+/// windows pair the current minute/day usage with the plan cap (cap 0 = unlimited).
+export class TenantStats {
+  lifetime: Map<string, i64> = new Map<string, i64>();
+  reqMinuteUsed: i64 = 0;
+  reqMinuteCap: u64 = 0;
+  reqDayUsed: i64 = 0;
+  reqDayCap: u64 = 0;
+}
+
+/// Per-domain analytics. A site reads its OWN stats with `Analytics.self()`. The
+/// privileged `dacely.com` domain may read ANY site with `Analytics.site(domain)`; any
+/// other caller gets `null` for a cross-domain read (`null` is also an unknown domain).
+/// The trusted calling domain is decided host-side — the guest cannot forge it.
+export class Analytics {
+  private static decode(buf: Uint8Array): TenantStats {
+    const r = new DataReader(buf);
+    const stats = new TenantStats();
+    r.readU16(); // frame version (currently 1)
+    const count = r.readU32();
+    for (let i: u32 = 0; i < count; i++) {
+      const name = r.readString();
+      stats.lifetime.set(name, r.readI64());
+    }
+    stats.reqMinuteUsed = r.readI64();
+    stats.reqMinuteCap = r.readU64();
+    stats.reqDayUsed = r.readI64();
+    stats.reqDayCap = r.readU64();
+    return stats;
+  }
+
+  /// This site's own analytics. Returns empty stats if unavailable.
+  static self(): TenantStats {
+    const status = analyticsHost.read(0, 0);
+    if (status < 0) return new TenantStats();
+    return Analytics.decode(__toildbTake(status));
+  }
+
+  /// Another site's analytics. Only `dacely.com` may call this for a domain other than
+  /// its own; every other caller (and an unknown domain) gets `null`.
+  static site(domain: string): TenantStats | null {
+    const db = Uint8Array.wrap(String.UTF8.encode(domain));
+    const status = analyticsHost.read(db.dataStart, db.byteLength);
+    if (status < 0) return null;
+    return Analytics.decode(__toildbTake(status));
   }
 }
 
