@@ -282,4 +282,10 @@ export namespace analyticsHost {
   // @ts-ignore: decorator
   @external("env", "analytics_read")
   export declare function read(domainPtr: usize, domainLen: i32): i32;
+
+  // analytics_list_sites(cursor, limit): frame length (count u32 | (u32 nameLen, name)* |
+  // has_more u8) stashed for takeResult; -3 forbidden when the caller is not dacely.com.
+  // @ts-ignore: decorator
+  @external("env", "analytics_list_sites")
+  export declare function listSites(cursorPtr: usize, cursorLen: i32, limit: i32): i32;
 }
