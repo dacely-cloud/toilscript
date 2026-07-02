@@ -2924,7 +2924,7 @@ export class Parser extends DiagnosticEmitter {
    * `injectRestController`. Each method becomes an id-matched arm of a synthesized
    * `__rpcDispatch(__id, __body)`: decode the positional args from the body, call the method on a FRESH
    * instance (stateless, exactly like a `@rest` controller), encode the result. The id is FNV-1a of
-   * `"Class.method"` - the identical hash the generated client sends in the `toil-rpc` header, so the
+   * `"Class.method"` - the identical hash the generated client sends in the `dacely-rpc` header, so the
    * wire matches without the two sides sharing state. `DataReader`/`DataWriter` are ambient (std).
    */
   private injectService(declaration: ClassDeclaration): void {
