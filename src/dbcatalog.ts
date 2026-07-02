@@ -777,7 +777,7 @@ export function buildToilDbRouteKinds(program: Program): Uint8Array | null {
  *    u16 format_version = 1
  *    u16 n_methods
  *    per method:
- *      u32 method_id      (FNV-1a of "ClassName.methodName" or "fnName", the `toil-rpc` header id)
+ *      u32 method_id      (FNV-1a of "ClassName.methodName" or "fnName", the `dacely-rpc` header id)
  *      u8  function_kind  (1 = Action)
  */
 export function buildToilDbRpcKinds(program: Program): Uint8Array | null {
