@@ -2677,7 +2677,9 @@ export class Parser extends DiagnosticEmitter {
           this.injectDataCodec(declaration);
         } else if (dk == DecoratorKind.User) {
           // `@user` IS a `@data` class (same binary codec) plus the typed
-          // `AuthService.getUser()` bridge.
+          // `AuthService.getUser()` bridge. Under built-in auth (`server.auth`) the reserved identity fields
+          // are injected FIRST (before the codec runs) so an app can extend the authenticated user shape.
+          if (this.options != null && this.options.authUser) this.injectAuthIdentityFields(declaration);
           this.injectDataCodec(declaration);
           this.injectUserBinding(declaration);
         } else if (dk == DecoratorKind.Rest) {
@@ -3646,6 +3648,48 @@ export class Parser extends DiagnosticEmitter {
     this.injectTopLevelStatements(declaration,
       "// @ts-ignore: injected\n@global function __toilDecodeAuthUser(__b: Uint8Array): AuthUser { return changetype<AuthUser>(" +
       className + ".decode(__b)); }\n");
+    // Built-in auth: a shape-agnostic session encoder the shipped controller calls to mint a session for ANY
+    // `@user` shape. Constructs the user (app fields at their defaults), sets the injected identity, encodes.
+    if (this.options != null && this.options.authUser) {
+      this.injectTopLevelStatements(declaration,
+        "// @ts-ignore: injected\n@global function __toilEncodeAuthUser(__id: Uint8Array, __username: string): Uint8Array { const __u = new " +
+        className + "(); __u.toilUserId = __id; __u.username = __username; return __u.encode(); }\n");
+    }
+  }
+
+  /** Built-in auth (`server.auth`) reserves `toilUserId` + `username` as the FIRST two `@user` fields, so an
+   *  app can add its own fields to the authenticated user without repeating the identity boilerplate. Errors
+   *  if the class already declares either reserved name. Prepended toilUserId-first so `AuthService.userId()`
+   *  recovers the stable id straight from the session codec. Runs before `injectDataCodec` so the codec
+   *  covers the injected fields. */
+  private injectAuthIdentityFields(declaration: ClassDeclaration): void {
+    let members = declaration.members;
+    for (let i = 0, k = members.length; i < k; ++i) {
+      let m = members[i];
+      if (m.kind == NodeKind.FieldDeclaration) {
+        let fname = (<FieldDeclaration>m).name.text;
+        if (fname == "toilUserId" || fname == "username") {
+          this.error(DiagnosticCode.User_defined_0, (<FieldDeclaration>m).name.range,
+            "@user field '" + fname + "' is reserved by built-in auth (server.auth) and injected automatically; rename this field, or disable server.auth to hand-write the user shape");
+          return;
+        }
+      }
+    }
+    // Prepend username first, then toilUserId, so the final order is [toilUserId, username, ...app fields].
+    let unM = this.parseAuthField(declaration, "username: string = \"\";");
+    if (unM != null) members.unshift(unM);
+    let idM = this.parseAuthField(declaration, "toilUserId: Uint8Array = new Uint8Array(0);");
+    if (idM != null) members.unshift(idM);
+  }
+
+  /** Parse one synthesized field for {@link injectAuthIdentityFields}: returns the member (does not push). */
+  private parseAuthField(declaration: ClassDeclaration, source: string): DeclarationStatement | null {
+    let userSource = declaration.range.source;
+    let synthetic = new Source(userSource.sourceKind, userSource.normalizedPath, source);
+    let tn = new Tokenizer(synthetic, this.diagnostics);
+    let member = this.parseClassMember(tn, declaration);
+    if (member != null && member instanceof DeclarationStatement) return <DeclarationStatement>member;
+    return null;
   }
 
   /** True if `decorators` carries a decorator of `kind` (e.g. `@auth`). */

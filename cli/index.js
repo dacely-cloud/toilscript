@@ -327,6 +327,7 @@ export async function main(argv, options) {
     }
   }
   assemblyscript.setTargetMode(compilerOptions, targetMode);
+  assemblyscript.setAuthUser(compilerOptions, !!opts.authUser);
   assemblyscript.setTarget(compilerOptions, 0);
   assemblyscript.setDebugInfo(compilerOptions, !!opts.debug);
   assemblyscript.setRuntime(compilerOptions, runtime);

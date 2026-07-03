@@ -147,6 +147,11 @@ export function setTargetMode(options: Options, targetMode: string | null): void
   options.targetMode = targetMode;
 }
 
+/** Enables built-in-auth `@user` field injection (reserved `toilUserId` + `username`). */
+export function setAuthUser(options: Options, authUser: bool): void {
+  options.authUser = authUser;
+}
+
 /** Sets the `lowMemoryLimit` option. */
 export function setLowMemoryLimit(options: Options, lowMemoryLimit: i32): void {
   options.lowMemoryLimit = lowMemoryLimit;
