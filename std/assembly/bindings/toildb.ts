@@ -283,6 +283,12 @@ export namespace analyticsHost {
   @external("env", "analytics_read")
   export declare function read(domainPtr: usize, domainLen: i32): i32;
 
+  // analytics_series(domain, metricId, range): frame length (v2 series frame) stashed for takeResult,
+  // or a negative status (-2 absent / -3 forbidden / bad metric or range).
+  // @ts-ignore: decorator
+  @external("env", "analytics_series")
+  export declare function series(domainPtr: usize, domainLen: i32, metricId: i32, range: i32): i32;
+
   // analytics_list_sites(cursor, limit): frame length (count u32 | (u32 nameLen, name)* |
   // has_more u8) stashed for takeResult; -3 forbidden when the caller is not dacely.com.
   // @ts-ignore: decorator
