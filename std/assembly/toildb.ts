@@ -440,7 +440,7 @@ export class Counter<K> {
 
 /// Every per-domain metric, by stable numeric id. This is the WIRE CONTRACT shared with the edge
 /// (`src/analytics/metric_id.rs`) and the dev server; it orders the snapshot frame and addresses a
-/// time-series. Ids `0..=40` are cumulative COUNTERS (a rate is `value / seconds`); `41..=44` are the
+/// time-series. Ids `0..=42` are cumulative COUNTERS (a rate is `value / seconds`); `43..=46` are the
 /// avg/peak series of the two GAUGES. Append-only: never renumber.
 export enum MetricId {
   Requests = 0,
@@ -484,15 +484,17 @@ export enum MetricId {
   DaemonHttpCallFailures = 38,
   MemGrownBytes = 39,
   Emails = 40,
-  ConnectedStreamsAvg = 41,
-  ConnectedStreamsPeak = 42,
-  CommittedMemoryAvg = 43,
-  CommittedMemoryPeak = 44,
+  CacheHits = 41,
+  CacheMisses = 42,
+  ConnectedStreamsAvg = 43,
+  ConnectedStreamsPeak = 44,
+  CommittedMemoryAvg = 45,
+  CommittedMemoryPeak = 46,
 }
 
-/// The number of cumulative counter metrics (`MetricId 0..=40`) = the length of the snapshot's lifetime
+/// The number of cumulative counter metrics (`MetricId 0..=42`) = the length of the snapshot's lifetime
 /// section.
-export const METRIC_COUNTERS: i32 = 41;
+export const METRIC_COUNTERS: i32 = 43;
 
 /// A dashboard time range for `Analytics.series`. Short ranges (1h/6h) read the per-MINUTE ring; the rest
 /// read the per-HOUR ring (30-day retention).
@@ -512,55 +514,80 @@ export enum AnalyticsRange {
 /// value either by the typed getter (`stats.requests`) or by id (`stats.metric(MetricId.Requests)`).
 export class TenantStats {
   /// Lifetime totals indexed by `MetricId` (length `METRIC_COUNTERS`). Prefer the named getters below.
-  life: StaticArray<i64> = new StaticArray<i64>(METRIC_COUNTERS);
+  life: StaticArray<u64> = new StaticArray<u64>(METRIC_COUNTERS);
   /// Live gauges (current level, not a total).
-  connectedStreams: i64 = 0;
-  committedMemory: i64 = 0;
+  connectedStreams: u64 = 0;
+  committedMemory: u64 = 0;
   /// Request windows: current bucket usage + plan cap (0 = unlimited).
-  reqMinuteUsed: i64 = 0;
+  reqMinuteUsed: u64 = 0;
   reqMinuteCap: u64 = 0;
-  reqDayUsed: i64 = 0;
+  reqDayUsed: u64 = 0;
   reqDayCap: u64 = 0;
   /// Edge wall-clock (ms) when the snapshot was read.
   nowMs: u64 = 0;
 
   /// Any counter metric by id (0 for an out-of-range id).
-  metric(id: MetricId): i64 {
+  metric(id: MetricId): u64 {
     return <i32>id < METRIC_COUNTERS ? this.life[<i32>id] : 0;
   }
 
   // Typed getters for every counter (the catalog: no magic strings, self-documenting).
-  get requests(): i64 { return this.life[MetricId.Requests]; }
-  get bytesOutL1(): i64 { return this.life[MetricId.BytesOutL1]; }
-  get bytesInL1(): i64 { return this.life[MetricId.BytesInL1]; }
-  get status2xx(): i64 { return this.life[MetricId.Status2xx]; }
-  get status3xx(): i64 { return this.life[MetricId.Status3xx]; }
-  get status4xx(): i64 { return this.life[MetricId.Status4xx]; }
-  get status5xx(): i64 { return this.life[MetricId.Status5xx]; }
-  get staticHits(): i64 { return this.life[MetricId.StaticHits]; }
-  get wasmDispatches(): i64 { return this.life[MetricId.WasmDispatches]; }
-  get executorFullRejects(): i64 { return this.life[MetricId.ExecutorFullRejects]; }
-  get unknownHostRejects(): i64 { return this.life[MetricId.UnknownHostRejects]; }
-  get rateLimitedRejects(): i64 { return this.life[MetricId.RateLimitedRejects]; }
-  get gasUsed(): i64 { return this.life[MetricId.GasUsed]; }
-  get dbOps(): i64 { return this.life[MetricId.DbOps]; }
-  get dbReads(): i64 { return this.life[MetricId.DbReads]; }
-  get dbWrites(): i64 { return this.life[MetricId.DbWrites]; }
-  get dbErrors(): i64 { return this.life[MetricId.DbErrors]; }
-  get dbLatencyNsSum(): i64 { return this.life[MetricId.DbLatencyNsSum]; }
-  get streamAccepts(): i64 { return this.life[MetricId.StreamAccepts]; }
-  get streamBytesIn(): i64 { return this.life[MetricId.StreamBytesIn]; }
-  get streamBytesOut(): i64 { return this.life[MetricId.StreamBytesOut]; }
-  get streamCloses(): i64 { return this.life[MetricId.StreamCloses]; }
-  get streamDisconnects(): i64 { return this.life[MetricId.StreamDisconnects]; }
-  get daemonTicks(): i64 { return this.life[MetricId.DaemonTicksFired]; }
-  get memGrownBytes(): i64 { return this.life[MetricId.MemGrownBytes]; }
-  get emails(): i64 { return this.life[MetricId.Emails]; }
+  get requests(): u64 { return this.life[MetricId.Requests]; }
+  get bytesOutL1(): u64 { return this.life[MetricId.BytesOutL1]; }
+  get bytesInL1(): u64 { return this.life[MetricId.BytesInL1]; }
+  get status2xx(): u64 { return this.life[MetricId.Status2xx]; }
+  get status3xx(): u64 { return this.life[MetricId.Status3xx]; }
+  get status4xx(): u64 { return this.life[MetricId.Status4xx]; }
+  get status5xx(): u64 { return this.life[MetricId.Status5xx]; }
+  get staticHits(): u64 { return this.life[MetricId.StaticHits]; }
+  get wasmDispatches(): u64 { return this.life[MetricId.WasmDispatches]; }
+  get executorFullRejects(): u64 { return this.life[MetricId.ExecutorFullRejects]; }
+  get unknownHostRejects(): u64 { return this.life[MetricId.UnknownHostRejects]; }
+  get rateLimitedRejects(): u64 { return this.life[MetricId.RateLimitedRejects]; }
+  get gasUsed(): u64 { return this.life[MetricId.GasUsed]; }
+  get dbOps(): u64 { return this.life[MetricId.DbOps]; }
+  get dbReads(): u64 { return this.life[MetricId.DbReads]; }
+  get dbWrites(): u64 { return this.life[MetricId.DbWrites]; }
+  get dbErrors(): u64 { return this.life[MetricId.DbErrors]; }
+  get dbLatencyNsSum(): u64 { return this.life[MetricId.DbLatencyNsSum]; }
+  get streamAccepts(): u64 { return this.life[MetricId.StreamAccepts]; }
+  get streamRejectWrongNode(): u64 { return this.life[MetricId.StreamRejectWrongNode]; }
+  get streamRejectCapacity(): u64 { return this.life[MetricId.StreamRejectCapacity]; }
+  get streamRejectArtifact(): u64 { return this.life[MetricId.StreamRejectArtifact]; }
+  get streamRejectGuest(): u64 { return this.life[MetricId.StreamRejectGuest]; }
+  get streamTraps(): u64 { return this.life[MetricId.StreamTraps]; }
+  get streamIdleTimeouts(): u64 { return this.life[MetricId.StreamIdleTimeouts]; }
+  get streamBytesIn(): u64 { return this.life[MetricId.StreamBytesIn]; }
+  get streamBytesOut(): u64 { return this.life[MetricId.StreamBytesOut]; }
+  get streamBackpressureEvents(): u64 { return this.life[MetricId.StreamBackpressureEvents]; }
+  get streamCloses(): u64 { return this.life[MetricId.StreamCloses]; }
+  get streamDisconnects(): u64 { return this.life[MetricId.StreamDisconnects]; }
+  get daemonStarts(): u64 { return this.life[MetricId.DaemonStarts]; }
+  get daemonStartFailures(): u64 { return this.life[MetricId.DaemonStartFailures]; }
+  get daemonTicksFired(): u64 { return this.life[MetricId.DaemonTicksFired]; }
+  get daemonTicksSkippedNotLeader(): u64 { return this.life[MetricId.DaemonTicksSkippedNotLeader]; }
+  get daemonTicksFailed(): u64 { return this.life[MetricId.DaemonTicksFailed]; }
+  get daemonLeaderAcquires(): u64 { return this.life[MetricId.DaemonLeaderAcquires]; }
+  get daemonLeaderFenced(): u64 { return this.life[MetricId.DaemonLeaderFenced]; }
+  get daemonHttpCallAttempts(): u64 { return this.life[MetricId.DaemonHttpCallAttempts]; }
+  get daemonHttpCallFailures(): u64 { return this.life[MetricId.DaemonHttpCallFailures]; }
+  get memGrownBytes(): u64 { return this.life[MetricId.MemGrownBytes]; }
+  get emails(): u64 { return this.life[MetricId.Emails]; }
+  get cacheHits(): u64 { return this.life[MetricId.CacheHits]; }
+  get cacheMisses(): u64 { return this.life[MetricId.CacheMisses]; }
 
   /// Mean host-observed DB op latency (ns), or 0 with no ops.
-  get meanDbLatencyNs(): i64 {
+  get meanDbLatencyNs(): u64 {
     const ops = this.dbOps;
     return ops > 0 ? this.dbLatencyNsSum / ops : 0;
+  }
+
+  /// Fraction of cacheable responses served from cache (`hits / (hits + misses)`),
+  /// 0.0 when there were no cacheable responses.
+  get cacheRatio(): f64 {
+    const hits = this.cacheHits;
+    const total = hits + this.cacheMisses;
+    return total > 0 ? <f64>hits / <f64>total : 0.0;
   }
 }
 
@@ -599,14 +626,15 @@ export class Analytics {
     stats.nowMs = r.readU64();
     const count = <i32>r.readU32();
     for (let i: i32 = 0; i < count && r.ok; i++) {
-      const v = r.readI64();
+      // Wire fields are non-negative i64; read the same bytes as u64.
+      const v = r.readU64();
       if (i < METRIC_COUNTERS) stats.life[i] = v; // ignore any extra (forward-compat)
     }
-    stats.connectedStreams = r.readI64();
-    stats.committedMemory = r.readI64();
-    stats.reqMinuteUsed = r.readI64();
+    stats.connectedStreams = r.readU64();
+    stats.committedMemory = r.readU64();
+    stats.reqMinuteUsed = r.readU64();
     stats.reqMinuteCap = r.readU64();
-    stats.reqDayUsed = r.readI64();
+    stats.reqDayUsed = r.readU64();
     stats.reqDayCap = r.readU64();
     return stats;
   }

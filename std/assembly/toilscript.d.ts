@@ -282,8 +282,8 @@ declare class Events<K, V> {
   latest(key: K, limit: i32): V[];
 }
 
-/** Every per-domain metric, by stable numeric id (the wire contract). `0..=40` are cumulative
- *  COUNTERS (rate = value/seconds); `41..=44` are the avg/peak series of the two GAUGES. */
+/** Every per-domain metric, by stable numeric id (the wire contract). `0..=42` are cumulative
+ *  COUNTERS (rate = value/seconds); `43..=46` are the avg/peak series of the two GAUGES. */
 declare const enum MetricId {
   Requests = 0, BytesOutL1 = 1, BytesInL1 = 2,
   Status2xx = 3, Status3xx = 4, Status4xx = 5, Status5xx = 6,
@@ -296,7 +296,8 @@ declare const enum MetricId {
   DaemonStarts = 30, DaemonStartFailures = 31, DaemonTicksFired = 32, DaemonTicksSkippedNotLeader = 33,
   DaemonTicksFailed = 34, DaemonLeaderAcquires = 35, DaemonLeaderFenced = 36,
   DaemonHttpCallAttempts = 37, DaemonHttpCallFailures = 38, MemGrownBytes = 39, Emails = 40,
-  ConnectedStreamsAvg = 41, ConnectedStreamsPeak = 42, CommittedMemoryAvg = 43, CommittedMemoryPeak = 44,
+  CacheHits = 41, CacheMisses = 42,
+  ConnectedStreamsAvg = 43, ConnectedStreamsPeak = 44, CommittedMemoryAvg = 45, CommittedMemoryPeak = 46,
 }
 
 /** A dashboard time range for `Analytics.series`. 1h/6h are per-minute; the rest per-hour (30-day). */
@@ -308,39 +309,58 @@ declare const enum AnalyticsRange {
  *  live gauge levels, and the request windows (current usage + plan cap; cap 0 = unlimited). Read a
  *  value by typed getter (`stats.requests`) or by id (`stats.metric(MetricId.Requests)`). */
 declare class TenantStats {
-  metric(id: MetricId): i64;
-  readonly requests: i64;
-  readonly bytesOutL1: i64;
-  readonly bytesInL1: i64;
-  readonly status2xx: i64;
-  readonly status3xx: i64;
-  readonly status4xx: i64;
-  readonly status5xx: i64;
-  readonly staticHits: i64;
-  readonly wasmDispatches: i64;
-  readonly executorFullRejects: i64;
-  readonly unknownHostRejects: i64;
-  readonly rateLimitedRejects: i64;
-  readonly gasUsed: i64;
-  readonly dbOps: i64;
-  readonly dbReads: i64;
-  readonly dbWrites: i64;
-  readonly dbErrors: i64;
-  readonly dbLatencyNsSum: i64;
-  readonly meanDbLatencyNs: i64;
-  readonly streamAccepts: i64;
-  readonly streamBytesIn: i64;
-  readonly streamBytesOut: i64;
-  readonly streamCloses: i64;
-  readonly streamDisconnects: i64;
-  readonly daemonTicks: i64;
-  readonly memGrownBytes: i64;
-  readonly emails: i64;
-  connectedStreams: i64;
-  committedMemory: i64;
-  reqMinuteUsed: i64;
+  metric(id: MetricId): u64;
+  readonly requests: u64;
+  readonly bytesOutL1: u64;
+  readonly bytesInL1: u64;
+  readonly status2xx: u64;
+  readonly status3xx: u64;
+  readonly status4xx: u64;
+  readonly status5xx: u64;
+  readonly staticHits: u64;
+  readonly wasmDispatches: u64;
+  readonly executorFullRejects: u64;
+  readonly unknownHostRejects: u64;
+  readonly rateLimitedRejects: u64;
+  readonly gasUsed: u64;
+  readonly dbOps: u64;
+  readonly dbReads: u64;
+  readonly dbWrites: u64;
+  readonly dbErrors: u64;
+  readonly dbLatencyNsSum: u64;
+  readonly meanDbLatencyNs: u64;
+  readonly streamAccepts: u64;
+  readonly streamRejectWrongNode: u64;
+  readonly streamRejectCapacity: u64;
+  readonly streamRejectArtifact: u64;
+  readonly streamRejectGuest: u64;
+  readonly streamTraps: u64;
+  readonly streamIdleTimeouts: u64;
+  readonly streamBytesIn: u64;
+  readonly streamBytesOut: u64;
+  readonly streamBackpressureEvents: u64;
+  readonly streamCloses: u64;
+  readonly streamDisconnects: u64;
+  readonly daemonStarts: u64;
+  readonly daemonStartFailures: u64;
+  readonly daemonTicksFired: u64;
+  readonly daemonTicksSkippedNotLeader: u64;
+  readonly daemonTicksFailed: u64;
+  readonly daemonLeaderAcquires: u64;
+  readonly daemonLeaderFenced: u64;
+  readonly daemonHttpCallAttempts: u64;
+  readonly daemonHttpCallFailures: u64;
+  readonly memGrownBytes: u64;
+  readonly emails: u64;
+  readonly cacheHits: u64;
+  readonly cacheMisses: u64;
+  /** Fraction of cacheable responses served from cache (`hits / (hits + misses)`), 0.0 when none. */
+  readonly cacheRatio: f64;
+  connectedStreams: u64;
+  committedMemory: u64;
+  reqMinuteUsed: u64;
   reqMinuteCap: u64;
-  reqDayUsed: i64;
+  reqDayUsed: u64;
   reqDayCap: u64;
   nowMs: u64;
 }
