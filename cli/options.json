@@ -28,6 +28,11 @@
     "description": "Toil compile surface mode: 'hot' (request/stream) or 'cold' (daemon). Omit for the default request artifact.",
     "type": "s"
   },
+  "authUser": {
+    "category": "General",
+    "description": "Built-in auth: inject the reserved toilUserId + username fields into the single @user (used by the toiljs server.auth build when the app declares its own @user).",
+    "type": "b"
+  },
   "noConfigEntries": {
     "category": "General",
     "description": "Ignore the toilconfig 'entries' array and compile ONLY the entry files given on the command line. Used by the toiljs multi-artifact build, which hands each pass (request/stream/daemon) its own entry subset.",

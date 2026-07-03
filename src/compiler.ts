@@ -251,6 +251,10 @@ export class Options {
   /** Toil compile surface mode. null = default request artifact. "hot" = request + stream surface.
    *  "cold" = daemon surface. */
   targetMode: string | null = null;   // "hot" | "cold" | null
+  /** Built-in auth (`server.auth`): inject the reserved `toilUserId` + `username` identity fields into the
+   *  single `@user` so an app can extend the authenticated user with its own fields. Set by the toiljs build
+   *  when it detects the app declares its own `@user` under `server.auth`. */
+  authUser: bool = false;
   /** Runtime type. Defaults to Incremental GC. */
   runtime: Runtime = Runtime.Incremental;
   /** If true, indicates that debug information will be emitted by Binaryen. */
