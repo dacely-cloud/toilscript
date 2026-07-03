@@ -282,19 +282,79 @@ declare class Events<K, V> {
   latest(key: K, limit: i32): V[];
 }
 
-/** One tenant's analytics snapshot: per-metric lifetime totals + the request rate
- *  windows (current usage paired with the plan cap; cap 0 = unlimited). */
+/** Every per-domain metric, by stable numeric id (the wire contract). `0..=40` are cumulative
+ *  COUNTERS (rate = value/seconds); `41..=44` are the avg/peak series of the two GAUGES. */
+declare const enum MetricId {
+  Requests = 0, BytesOutL1 = 1, BytesInL1 = 2,
+  Status2xx = 3, Status3xx = 4, Status4xx = 5, Status5xx = 6,
+  StaticHits = 7, WasmDispatches = 8,
+  ExecutorFullRejects = 9, UnknownHostRejects = 10, RateLimitedRejects = 11, GasUsed = 12,
+  DbOps = 13, DbReads = 14, DbWrites = 15, DbErrors = 16, DbLatencyNsSum = 17,
+  StreamAccepts = 18, StreamRejectWrongNode = 19, StreamRejectCapacity = 20, StreamRejectArtifact = 21,
+  StreamRejectGuest = 22, StreamTraps = 23, StreamIdleTimeouts = 24, StreamBytesIn = 25,
+  StreamBytesOut = 26, StreamBackpressureEvents = 27, StreamCloses = 28, StreamDisconnects = 29,
+  DaemonStarts = 30, DaemonStartFailures = 31, DaemonTicksFired = 32, DaemonTicksSkippedNotLeader = 33,
+  DaemonTicksFailed = 34, DaemonLeaderAcquires = 35, DaemonLeaderFenced = 36,
+  DaemonHttpCallAttempts = 37, DaemonHttpCallFailures = 38, MemGrownBytes = 39, Emails = 40,
+  ConnectedStreamsAvg = 41, ConnectedStreamsPeak = 42, CommittedMemoryAvg = 43, CommittedMemoryPeak = 44,
+}
+
+/** A dashboard time range for `Analytics.series`. 1h/6h are per-minute; the rest per-hour (30-day). */
+declare const enum AnalyticsRange {
+  H1 = 0, H6 = 1, H12 = 2, H24 = 3, D3 = 4, D7 = 5, D14 = 6, D30 = 7,
+}
+
+/** One tenant's analytics snapshot: lifetime totals (indexed by `MetricId`, no string keys), the two
+ *  live gauge levels, and the request windows (current usage + plan cap; cap 0 = unlimited). Read a
+ *  value by typed getter (`stats.requests`) or by id (`stats.metric(MetricId.Requests)`). */
 declare class TenantStats {
-  lifetime: Map<string, i64>;
+  metric(id: MetricId): i64;
+  readonly requests: i64;
+  readonly bytesOutL1: i64;
+  readonly bytesInL1: i64;
+  readonly status2xx: i64;
+  readonly status3xx: i64;
+  readonly status4xx: i64;
+  readonly status5xx: i64;
+  readonly staticHits: i64;
+  readonly wasmDispatches: i64;
+  readonly executorFullRejects: i64;
+  readonly unknownHostRejects: i64;
+  readonly rateLimitedRejects: i64;
+  readonly gasUsed: i64;
+  readonly dbOps: i64;
+  readonly dbReads: i64;
+  readonly dbWrites: i64;
+  readonly dbErrors: i64;
+  readonly dbLatencyNsSum: i64;
+  readonly meanDbLatencyNs: i64;
+  readonly streamAccepts: i64;
+  readonly streamBytesIn: i64;
+  readonly streamBytesOut: i64;
+  readonly streamCloses: i64;
+  readonly streamDisconnects: i64;
+  readonly daemonTicks: i64;
+  readonly memGrownBytes: i64;
+  readonly emails: i64;
+  connectedStreams: i64;
+  committedMemory: i64;
   reqMinuteUsed: i64;
   reqMinuteCap: u64;
   reqDayUsed: i64;
   reqDayCap: u64;
+  nowMs: u64;
 }
 
-/** Per-domain analytics. `Analytics.self()` reads this site's own stats; the privileged
- *  `dacely.com` domain may read any site via `Analytics.site(domain)` (any other caller,
- *  or an unknown domain, gets `null`). The calling domain is decided host-side. */
+/** One metric's time series for a range: `points` oldest→newest, `bucketSecs` bucket width,
+ *  `headMs` newest bucket end. `ratePerSec(i)` derives the per-second rate of point `i`. */
+declare class Series {
+  metric: MetricId;
+  bucketSecs: u32;
+  headMs: u64;
+  points: i64[];
+  ratePerSec(i: i32): f64;
+}
+
 /** A page of site names from `Analytics.listSites` (dacely.com only). When `hasMore` is
  *  true, pass the last `sites` entry back as the next call's cursor. */
 declare class SiteList {
@@ -302,9 +362,14 @@ declare class SiteList {
   hasMore: bool;
 }
 
+/** Per-domain analytics. `Analytics.self()` reads this site's own stats; the privileged
+ *  `dacely.com` domain may read any site via `Analytics.site(domain)` (any other caller,
+ *  or an unknown domain, gets `null`). The calling domain is decided host-side. */
 declare class Analytics {
   static self(): TenantStats;
   static site(domain: string): TenantStats | null;
+  static series(metric: MetricId, range: AnalyticsRange): Series;
+  static siteSeries(domain: string, metric: MetricId, range: AnalyticsRange): Series | null;
   static listSites(cursor?: string, limit?: i32): SiteList;
 }
 

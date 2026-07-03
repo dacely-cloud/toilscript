@@ -438,16 +438,145 @@ export class Counter<K> {
   }
 }
 
-/// One tenant's analytics snapshot (the metering counters + plan limits), read via the
-/// `Analytics` API. `lifetime` holds the per-domain lifetime totals by metric name
-/// (`requests`, `bytes_served`, `status_2xx`.., `db_ops`, `stream_*`, ...); the request
-/// windows pair the current minute/day usage with the plan cap (cap 0 = unlimited).
+/// Every per-domain metric, by stable numeric id. This is the WIRE CONTRACT shared with the edge
+/// (`src/analytics/metric_id.rs`) and the dev server; it orders the snapshot frame and addresses a
+/// time-series. Ids `0..=40` are cumulative COUNTERS (a rate is `value / seconds`); `41..=44` are the
+/// avg/peak series of the two GAUGES. Append-only: never renumber.
+export enum MetricId {
+  Requests = 0,
+  BytesOutL1 = 1,
+  BytesInL1 = 2,
+  Status2xx = 3,
+  Status3xx = 4,
+  Status4xx = 5,
+  Status5xx = 6,
+  StaticHits = 7,
+  WasmDispatches = 8,
+  ExecutorFullRejects = 9,
+  UnknownHostRejects = 10,
+  RateLimitedRejects = 11,
+  GasUsed = 12,
+  DbOps = 13,
+  DbReads = 14,
+  DbWrites = 15,
+  DbErrors = 16,
+  DbLatencyNsSum = 17,
+  StreamAccepts = 18,
+  StreamRejectWrongNode = 19,
+  StreamRejectCapacity = 20,
+  StreamRejectArtifact = 21,
+  StreamRejectGuest = 22,
+  StreamTraps = 23,
+  StreamIdleTimeouts = 24,
+  StreamBytesIn = 25,
+  StreamBytesOut = 26,
+  StreamBackpressureEvents = 27,
+  StreamCloses = 28,
+  StreamDisconnects = 29,
+  DaemonStarts = 30,
+  DaemonStartFailures = 31,
+  DaemonTicksFired = 32,
+  DaemonTicksSkippedNotLeader = 33,
+  DaemonTicksFailed = 34,
+  DaemonLeaderAcquires = 35,
+  DaemonLeaderFenced = 36,
+  DaemonHttpCallAttempts = 37,
+  DaemonHttpCallFailures = 38,
+  MemGrownBytes = 39,
+  Emails = 40,
+  ConnectedStreamsAvg = 41,
+  ConnectedStreamsPeak = 42,
+  CommittedMemoryAvg = 43,
+  CommittedMemoryPeak = 44,
+}
+
+/// The number of cumulative counter metrics (`MetricId 0..=40`) = the length of the snapshot's lifetime
+/// section.
+export const METRIC_COUNTERS: i32 = 41;
+
+/// A dashboard time range for `Analytics.series`. Short ranges (1h/6h) read the per-MINUTE ring; the rest
+/// read the per-HOUR ring (30-day retention).
+export enum AnalyticsRange {
+  H1 = 0,
+  H6 = 1,
+  H12 = 2,
+  H24 = 3,
+  D3 = 4,
+  D7 = 5,
+  D14 = 6,
+  D30 = 7,
+}
+
+/// One tenant's analytics snapshot: the lifetime totals (indexed by `MetricId`, NO string keys), the two
+/// live gauge levels, and the request windows paired with the plan caps (cap 0 = unlimited). Read every
+/// value either by the typed getter (`stats.requests`) or by id (`stats.metric(MetricId.Requests)`).
 export class TenantStats {
-  lifetime: Map<string, i64> = new Map<string, i64>();
+  /// Lifetime totals indexed by `MetricId` (length `METRIC_COUNTERS`). Prefer the named getters below.
+  life: StaticArray<i64> = new StaticArray<i64>(METRIC_COUNTERS);
+  /// Live gauges (current level, not a total).
+  connectedStreams: i64 = 0;
+  committedMemory: i64 = 0;
+  /// Request windows: current bucket usage + plan cap (0 = unlimited).
   reqMinuteUsed: i64 = 0;
   reqMinuteCap: u64 = 0;
   reqDayUsed: i64 = 0;
   reqDayCap: u64 = 0;
+  /// Edge wall-clock (ms) when the snapshot was read.
+  nowMs: u64 = 0;
+
+  /// Any counter metric by id (0 for an out-of-range id).
+  metric(id: MetricId): i64 {
+    return <i32>id < METRIC_COUNTERS ? this.life[<i32>id] : 0;
+  }
+
+  // Typed getters for every counter (the catalog: no magic strings, self-documenting).
+  get requests(): i64 { return this.life[MetricId.Requests]; }
+  get bytesOutL1(): i64 { return this.life[MetricId.BytesOutL1]; }
+  get bytesInL1(): i64 { return this.life[MetricId.BytesInL1]; }
+  get status2xx(): i64 { return this.life[MetricId.Status2xx]; }
+  get status3xx(): i64 { return this.life[MetricId.Status3xx]; }
+  get status4xx(): i64 { return this.life[MetricId.Status4xx]; }
+  get status5xx(): i64 { return this.life[MetricId.Status5xx]; }
+  get staticHits(): i64 { return this.life[MetricId.StaticHits]; }
+  get wasmDispatches(): i64 { return this.life[MetricId.WasmDispatches]; }
+  get executorFullRejects(): i64 { return this.life[MetricId.ExecutorFullRejects]; }
+  get unknownHostRejects(): i64 { return this.life[MetricId.UnknownHostRejects]; }
+  get rateLimitedRejects(): i64 { return this.life[MetricId.RateLimitedRejects]; }
+  get gasUsed(): i64 { return this.life[MetricId.GasUsed]; }
+  get dbOps(): i64 { return this.life[MetricId.DbOps]; }
+  get dbReads(): i64 { return this.life[MetricId.DbReads]; }
+  get dbWrites(): i64 { return this.life[MetricId.DbWrites]; }
+  get dbErrors(): i64 { return this.life[MetricId.DbErrors]; }
+  get dbLatencyNsSum(): i64 { return this.life[MetricId.DbLatencyNsSum]; }
+  get streamAccepts(): i64 { return this.life[MetricId.StreamAccepts]; }
+  get streamBytesIn(): i64 { return this.life[MetricId.StreamBytesIn]; }
+  get streamBytesOut(): i64 { return this.life[MetricId.StreamBytesOut]; }
+  get streamCloses(): i64 { return this.life[MetricId.StreamCloses]; }
+  get streamDisconnects(): i64 { return this.life[MetricId.StreamDisconnects]; }
+  get daemonTicks(): i64 { return this.life[MetricId.DaemonTicksFired]; }
+  get memGrownBytes(): i64 { return this.life[MetricId.MemGrownBytes]; }
+  get emails(): i64 { return this.life[MetricId.Emails]; }
+
+  /// Mean host-observed DB op latency (ns), or 0 with no ops.
+  get meanDbLatencyNs(): i64 {
+    const ops = this.dbOps;
+    return ops > 0 ? this.dbLatencyNsSum / ops : 0;
+  }
+}
+
+/// One metric's time series for a range: `points` oldest→newest, `bucketSecs` the per-bucket width, and
+/// `headMs` the newest bucket's end. Rates are derived, never stored.
+export class Series {
+  metric: MetricId = MetricId.Requests;
+  bucketSecs: u32 = 0;
+  headMs: u64 = 0;
+  points: i64[] = [];
+
+  /// Per-second rate of bucket `i` (its total divided by the bucket width). 0 for an out-of-range index.
+  ratePerSec(i: i32): f64 {
+    if (i < 0 || i >= this.points.length || this.bucketSecs == 0) return 0;
+    return <f64>this.points[i] / <f64>this.bucketSecs;
+  }
 }
 
 /// A page of site names from `Analytics.listSites` (dacely.com only). When `hasMore` is
@@ -465,17 +594,36 @@ export class Analytics {
   private static decode(buf: Uint8Array): TenantStats {
     const r = new DataReader(buf);
     const stats = new TenantStats();
-    r.readU16(); // frame version (currently 1)
-    const count = r.readU32();
-    for (let i: u32 = 0; i < count && r.ok; i++) {
-      const name = r.readString();
-      stats.lifetime.set(name, r.readI64());
+    const version = r.readU16();
+    if (version < 2) return stats; // pre-v2 edge: refuse rather than mis-decode
+    stats.nowMs = r.readU64();
+    const count = <i32>r.readU32();
+    for (let i: i32 = 0; i < count && r.ok; i++) {
+      const v = r.readI64();
+      if (i < METRIC_COUNTERS) stats.life[i] = v; // ignore any extra (forward-compat)
     }
+    stats.connectedStreams = r.readI64();
+    stats.committedMemory = r.readI64();
     stats.reqMinuteUsed = r.readI64();
     stats.reqMinuteCap = r.readU64();
     stats.reqDayUsed = r.readI64();
     stats.reqDayCap = r.readU64();
     return stats;
+  }
+
+  private static decodeSeries(buf: Uint8Array): Series {
+    const r = new DataReader(buf);
+    const out = new Series();
+    const version = r.readU16();
+    if (version < 2) return out;
+    out.metric = <MetricId>r.readU16();
+    out.bucketSecs = r.readU32();
+    out.headMs = r.readU64();
+    const count = <i32>r.readU32();
+    const pts = new Array<i64>(count);
+    for (let i: i32 = 0; i < count && r.ok; i++) pts[i] = r.readI64();
+    out.points = pts;
+    return out;
   }
 
   /// This site's own analytics. Returns empty stats if unavailable.
@@ -492,6 +640,21 @@ export class Analytics {
     const status = analyticsHost.read(db.dataStart, db.byteLength);
     if (status < 0) return null;
     return Analytics.decode(__toildbTake(status));
+  }
+
+  /// This site's time-series for `metric` over `range` (for graphs). Empty series if unavailable.
+  static series(metric: MetricId, range: AnalyticsRange): Series {
+    const status = analyticsHost.series(0, 0, <i32>metric, <i32>range);
+    if (status < 0) return new Series();
+    return Analytics.decodeSeries(__toildbTake(status));
+  }
+
+  /// Another site's time-series (dacely.com only, else `null`).
+  static siteSeries(domain: string, metric: MetricId, range: AnalyticsRange): Series | null {
+    const db = Uint8Array.wrap(String.UTF8.encode(domain));
+    const status = analyticsHost.series(db.dataStart, db.byteLength, <i32>metric, <i32>range);
+    if (status < 0) return null;
+    return Analytics.decodeSeries(__toildbTake(status));
   }
 
   /// Enumerate sites, paginated. ONLY `dacely.com` gets results; any other caller gets an
