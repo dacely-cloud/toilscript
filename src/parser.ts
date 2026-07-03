@@ -252,6 +252,7 @@ function dbOpOf(family: string, method: string): string {
     case "Events": {
       if (method == "append") return "Append";
       if (method == "latest") return "Latest";
+      if (method == "since") return "EventsSince";
       return "";
     }
     case "Membership": {
@@ -275,12 +276,12 @@ function dbOpOf(family: string, method: string): string {
 
 function isDbReadOp(op: string): bool {
   return op == "Get" || op == "GetMany" || op == "Exists" || op == "ViewGet" ||
-    op == "CounterGet" || op == "UniqueLookup" || op == "Latest" ||
+    op == "CounterGet" || op == "UniqueLookup" || op == "Latest" || op == "EventsSince" ||
     op == "MembershipContains" || op == "MembershipList" || op == "CapacityAvailable";
 }
 
 function isDbScanOp(op: string): bool {
-  return op == "Latest" || op == "MembershipList";
+  return op == "Latest" || op == "MembershipList" || op == "EventsSince";
 }
 
 /** Static mirror of the edge `allowed_ops::kind_allows` (spec 6). */

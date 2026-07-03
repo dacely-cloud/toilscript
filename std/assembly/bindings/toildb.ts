@@ -223,6 +223,10 @@ export namespace toildbHost {
   @external("env", "data.latest")
   export declare function latest(handle: u32, keyPtr: usize, keyLen: i32, limit: i32): i32;
 
+  // @ts-ignore: decorator
+  @external("env", "data.events_since")
+  export declare function eventsSince(handle: u32, keyPtr: usize, keyLen: i32, limit: i32): i32;
+
   // events.append_once -> 1 appended | 0 duplicate (deduped on eventId) | <0 error.
   // Idempotent append: a retried call with the same eventId never doubles the event.
   // @ts-ignore: decorator
