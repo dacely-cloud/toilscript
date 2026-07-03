@@ -280,6 +280,7 @@ declare class Counter<K> {
 declare class Events<K, V> {
   append(key: K, event: V): void;
   latest(key: K, limit: i32): V[];
+  since(key: K, limit: i32): V[];
 }
 
 /** Every per-domain metric, by stable numeric id (the wire contract). `0..=42` are cumulative

@@ -733,6 +733,34 @@ export class Events<K, V> {
     return status == 1;
   }
 
+  /// The NEXT batch of events for `key` past this derive's checkpoint, OLDEST first, up to `limit`. The
+  /// host owns the resumable cursor (seeded from the durable checkpoint and advanced/committed around the
+  /// fold), so repeated calls drain an unbounded log in bounded batches and return an empty array once
+  /// caught up. Use it in a `@derive` (or `@job`) to fold a growing log incrementally instead of rescanning:
+  /// `for (const e of this.events.since(key, 500)) { ...update the view... }`, looping until it is empty.
+  /// The fold must be idempotent per event (a heal can trigger a full re-read). Same frame as `latest`.
+  since(key: K, limit: i32): V[] {
+    const kb = key.encode();
+    const status = toildbHost.eventsSince(this.__handle, kb.dataStart, kb.byteLength, limit);
+    if (status < 0) unreachable();
+    const blob = __toildbTake(status);
+    const out = new Array<V>();
+    let off: i32 = 0;
+    const count = load<u32>(blob.dataStart + off);
+    off += 4;
+    for (let i: u32 = 0; i < count; i++) {
+      const ver = <i64>load<u32>(blob.dataStart + off);
+      off += 4;
+      const len = <i32>load<u32>(blob.dataStart + off);
+      off += 4;
+      const ev = instantiate<V>();
+      ev.decodeIntoVersioned(blob.subarray(off, off + len), ver);
+      out.push(ev);
+      off += len;
+    }
+    return out;
+  }
+
   /// The newest `limit` events, newest first. Decodes each framed event into a
   /// `V`. The host frames them as `u32 count` then per event
   /// `u32 schema_version + u32 len + bytes`.
