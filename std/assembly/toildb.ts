@@ -451,50 +451,49 @@ export enum MetricId {
   Status4xx = 5,
   Status5xx = 6,
   StaticHits = 7,
-  WasmDispatches = 8,
-  ExecutorFullRejects = 9,
-  UnknownHostRejects = 10,
-  RateLimitedRejects = 11,
-  GasUsed = 12,
-  DbOps = 13,
-  DbReads = 14,
-  DbWrites = 15,
-  DbErrors = 16,
-  DbLatencyNsSum = 17,
-  StreamAccepts = 18,
-  StreamRejectWrongNode = 19,
-  StreamRejectCapacity = 20,
-  StreamRejectArtifact = 21,
-  StreamRejectGuest = 22,
-  StreamTraps = 23,
-  StreamIdleTimeouts = 24,
-  StreamBytesIn = 25,
-  StreamBytesOut = 26,
-  StreamBackpressureEvents = 27,
-  StreamCloses = 28,
-  StreamDisconnects = 29,
-  DaemonStarts = 30,
-  DaemonStartFailures = 31,
-  DaemonTicksFired = 32,
-  DaemonTicksSkippedNotLeader = 33,
-  DaemonTicksFailed = 34,
-  DaemonLeaderAcquires = 35,
-  DaemonLeaderFenced = 36,
-  DaemonHttpCallAttempts = 37,
-  DaemonHttpCallFailures = 38,
-  MemGrownBytes = 39,
-  Emails = 40,
-  CacheHits = 41,
-  CacheMisses = 42,
-  ConnectedStreamsAvg = 43,
-  ConnectedStreamsPeak = 44,
-  CommittedMemoryAvg = 45,
-  CommittedMemoryPeak = 46,
+  ExecutorFullRejects = 8,
+  UnknownHostRejects = 9,
+  RateLimitedRejects = 10,
+  GasUsed = 11,
+  DbOps = 12,
+  DbReads = 13,
+  DbWrites = 14,
+  DbErrors = 15,
+  DbLatencyNsSum = 16,
+  StreamAccepts = 17,
+  StreamRejectWrongNode = 18,
+  StreamRejectCapacity = 19,
+  StreamRejectArtifact = 20,
+  StreamRejectGuest = 21,
+  StreamTraps = 22,
+  StreamIdleTimeouts = 23,
+  StreamBytesIn = 24,
+  StreamBytesOut = 25,
+  StreamBackpressureEvents = 26,
+  StreamCloses = 27,
+  StreamDisconnects = 28,
+  DaemonStarts = 29,
+  DaemonStartFailures = 30,
+  DaemonTicksFired = 31,
+  DaemonTicksSkippedNotLeader = 32,
+  DaemonTicksFailed = 33,
+  DaemonLeaderAcquires = 34,
+  DaemonLeaderFenced = 35,
+  DaemonHttpCallAttempts = 36,
+  DaemonHttpCallFailures = 37,
+  MemGrownBytes = 38,
+  Emails = 39,
+  CacheHits = 40,
+  CacheMisses = 41,
+  ConnectedStreamsAvg = 42,
+  ConnectedStreamsPeak = 43,
+  CommittedMemoryAvg = 44,
+  CommittedMemoryPeak = 45,
 }
 
-/// The number of cumulative counter metrics (`MetricId 0..=42`) = the length of the snapshot's lifetime
+/// The number of cumulative counter metrics (`MetricId 0..=41`) = the length of the snapshot's lifetime
 /// section.
-export const METRIC_COUNTERS: i32 = 43;
+export const METRIC_COUNTERS: i32 = 42;
 
 /// A dashboard time range for `Analytics.series`. Short ranges (1h/6h) read the per-MINUTE ring; the rest
 /// read the per-HOUR ring (30-day retention).
@@ -540,7 +539,6 @@ export class TenantStats {
   get status4xx(): u64 { return this.life[MetricId.Status4xx]; }
   get status5xx(): u64 { return this.life[MetricId.Status5xx]; }
   get staticHits(): u64 { return this.life[MetricId.StaticHits]; }
-  get wasmDispatches(): u64 { return this.life[MetricId.WasmDispatches]; }
   get executorFullRejects(): u64 { return this.life[MetricId.ExecutorFullRejects]; }
   get unknownHostRejects(): u64 { return this.life[MetricId.UnknownHostRejects]; }
   get rateLimitedRejects(): u64 { return this.life[MetricId.RateLimitedRejects]; }

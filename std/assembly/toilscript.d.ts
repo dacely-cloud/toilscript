@@ -283,21 +283,21 @@ declare class Events<K, V> {
 }
 
 /** Every per-domain metric, by stable numeric id (the wire contract). `0..=42` are cumulative
- *  COUNTERS (rate = value/seconds); `43..=46` are the avg/peak series of the two GAUGES. */
+ *  COUNTERS (rate = value/seconds); `42..=45` are the avg/peak series of the two GAUGES. */
 declare const enum MetricId {
   Requests = 0, BytesOutL1 = 1, BytesInL1 = 2,
   Status2xx = 3, Status3xx = 4, Status4xx = 5, Status5xx = 6,
-  StaticHits = 7, WasmDispatches = 8,
-  ExecutorFullRejects = 9, UnknownHostRejects = 10, RateLimitedRejects = 11, GasUsed = 12,
-  DbOps = 13, DbReads = 14, DbWrites = 15, DbErrors = 16, DbLatencyNsSum = 17,
-  StreamAccepts = 18, StreamRejectWrongNode = 19, StreamRejectCapacity = 20, StreamRejectArtifact = 21,
-  StreamRejectGuest = 22, StreamTraps = 23, StreamIdleTimeouts = 24, StreamBytesIn = 25,
-  StreamBytesOut = 26, StreamBackpressureEvents = 27, StreamCloses = 28, StreamDisconnects = 29,
-  DaemonStarts = 30, DaemonStartFailures = 31, DaemonTicksFired = 32, DaemonTicksSkippedNotLeader = 33,
-  DaemonTicksFailed = 34, DaemonLeaderAcquires = 35, DaemonLeaderFenced = 36,
-  DaemonHttpCallAttempts = 37, DaemonHttpCallFailures = 38, MemGrownBytes = 39, Emails = 40,
-  CacheHits = 41, CacheMisses = 42,
-  ConnectedStreamsAvg = 43, ConnectedStreamsPeak = 44, CommittedMemoryAvg = 45, CommittedMemoryPeak = 46,
+  StaticHits = 7,
+  ExecutorFullRejects = 8, UnknownHostRejects = 9, RateLimitedRejects = 10, GasUsed = 11,
+  DbOps = 12, DbReads = 13, DbWrites = 14, DbErrors = 15, DbLatencyNsSum = 16,
+  StreamAccepts = 17, StreamRejectWrongNode = 18, StreamRejectCapacity = 19, StreamRejectArtifact = 20,
+  StreamRejectGuest = 21, StreamTraps = 22, StreamIdleTimeouts = 23, StreamBytesIn = 24,
+  StreamBytesOut = 25, StreamBackpressureEvents = 26, StreamCloses = 27, StreamDisconnects = 28,
+  DaemonStarts = 29, DaemonStartFailures = 30, DaemonTicksFired = 31, DaemonTicksSkippedNotLeader = 32,
+  DaemonTicksFailed = 33, DaemonLeaderAcquires = 34, DaemonLeaderFenced = 35,
+  DaemonHttpCallAttempts = 36, DaemonHttpCallFailures = 37, MemGrownBytes = 38, Emails = 39,
+  CacheHits = 40, CacheMisses = 41,
+  ConnectedStreamsAvg = 42, ConnectedStreamsPeak = 43, CommittedMemoryAvg = 44, CommittedMemoryPeak = 45,
 }
 
 /** A dashboard time range for `Analytics.series`. 1h/6h are per-minute; the rest per-hour (30-day). */
@@ -318,7 +318,6 @@ declare class TenantStats {
   readonly status4xx: u64;
   readonly status5xx: u64;
   readonly staticHits: u64;
-  readonly wasmDispatches: u64;
   readonly executorFullRejects: u64;
   readonly unknownHostRejects: u64;
   readonly rateLimitedRejects: u64;
