@@ -440,8 +440,8 @@ export class Counter<K> {
 
 /// Every per-domain metric, by stable numeric id. This is the WIRE CONTRACT shared with the edge
 /// (`src/analytics/metric_id.rs`) and the dev server; it orders the snapshot frame and addresses a
-/// time-series. Ids `0..=42` are cumulative COUNTERS (a rate is `value / seconds`); `43..=46` are the
-/// avg/peak series of the two GAUGES. Append-only: never renumber.
+/// time-series. Ids `0..=41` are cumulative COUNTERS (a rate is `value / seconds`); `42..=45` are the
+/// avg/peak series of the two GAUGES (ConnectedStreams, CommittedMemory). Append-only: never renumber.
 export enum MetricId {
   Requests = 0,
   BytesOutL1 = 1,
