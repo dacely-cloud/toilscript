@@ -283,7 +283,7 @@ declare class Events<K, V> {
   since(key: K, limit: i32): V[];
 }
 
-/** Every per-domain metric, by stable numeric id (the wire contract). `0..=42` are cumulative
+/** Every per-domain metric, by stable numeric id (the wire contract). `0..=41` are cumulative
  *  COUNTERS (rate = value/seconds); `42..=45` are the avg/peak series of the two GAUGES. */
 declare const enum MetricId {
   Requests = 0, BytesOutL1 = 1, BytesInL1 = 2,
