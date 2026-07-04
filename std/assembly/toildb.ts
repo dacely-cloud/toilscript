@@ -495,8 +495,9 @@ export enum MetricId {
 /// section.
 export const METRIC_COUNTERS: i32 = 42;
 
-/// A dashboard time range for `Analytics.series`. Short ranges (1h/6h) read the per-MINUTE ring; the rest
-/// read the per-HOUR ring (30-day retention).
+/// A dashboard time range for `Analytics.series`. Short ranges (1h/6h) read the per-MINUTE ring; the long
+/// ranges (60d/90d) read the per-DAY ring (90-day retention); the rest read the per-HOUR ring (30-day).
+/// Append-only: never renumber (D60/D90 were added after D30, keeping the wire ids stable).
 export enum AnalyticsRange {
   H1 = 0,
   H6 = 1,
@@ -506,6 +507,8 @@ export enum AnalyticsRange {
   D7 = 5,
   D14 = 6,
   D30 = 7,
+  D60 = 8,
+  D90 = 9,
 }
 
 /// One tenant's analytics snapshot: the lifetime totals (indexed by `MetricId`, NO string keys), the two
@@ -522,6 +525,16 @@ export class TenantStats {
   reqMinuteCap: u64 = 0;
   reqDayUsed: u64 = 0;
   reqDayCap: u64 = 0;
+  /// LIVE per-second gauges (rates), computed edge-side from the last completed minute bucket so the
+  /// guest is STATELESS (no client diffing of two snapshots). Idle -> 0.0. `f64` (a rate is fractional
+  /// and bounded; f64 cannot overflow for any real value).
+  rps: f64 = 0;
+  bytesInPerSec: f64 = 0;
+  bytesOutPerSec: f64 = 0;
+  streamBytesInPerSec: f64 = 0;
+  streamBytesOutPerSec: f64 = 0;
+  dbOpsPerSec: f64 = 0;
+  gasPerSec: f64 = 0;
   /// Edge wall-clock (ms) when the snapshot was read.
   nowMs: u64 = 0;
 
@@ -589,18 +602,27 @@ export class TenantStats {
   }
 }
 
-/// One metric's time series for a range: `points` oldest→newest, `bucketSecs` the per-bucket width, and
-/// `headMs` the newest bucket's end. Rates are derived, never stored.
+/// One metric's time series for a range: `points` oldest→newest (per-bucket totals, `u64` — non-negative),
+/// `bucketSecs` the per-bucket width, and `headMs` the newest bucket's end. Rates are derived, never stored.
 export class Series {
   metric: MetricId = MetricId.Requests;
   bucketSecs: u32 = 0;
   headMs: u64 = 0;
-  points: i64[] = [];
+  points: u64[] = [];
 
   /// Per-second rate of bucket `i` (its total divided by the bucket width). 0 for an out-of-range index.
   ratePerSec(i: i32): f64 {
     if (i < 0 || i >= this.points.length || this.bucketSecs == 0) return 0;
     return <f64>this.points[i] / <f64>this.bucketSecs;
+  }
+
+  /// The CUMULATIVE total over the whole window (e.g. total bytes across a 30d/90d range). Folded into an
+  /// `f64` accumulator — NEVER a `u64`/`i64` sum, which could overflow a long byte-count window (AS has no
+  /// u128; `f64` max is 1.8e308, so it cannot overflow for any real value).
+  sum(): f64 {
+    let acc: f64 = 0;
+    for (let i = 0; i < this.points.length; i++) acc += <f64>this.points[i];
+    return acc;
   }
 }
 
@@ -634,6 +656,16 @@ export class Analytics {
     stats.reqMinuteCap = r.readU64();
     stats.reqDayUsed = r.readU64();
     stats.reqDayCap = r.readU64();
+    // LIVE per-second rates (f64), appended after the windows. VERSION-GATE by LENGTH: a pre-rates
+    // (shorter) frame from an older edge exhausts the buffer here, so `readF64` returns 0.0 for each
+    // missing rate (DataReader is bounds-checked). No frame-version bump needed.
+    stats.rps = r.readF64();
+    stats.bytesInPerSec = r.readF64();
+    stats.bytesOutPerSec = r.readF64();
+    stats.streamBytesInPerSec = r.readF64();
+    stats.streamBytesOutPerSec = r.readF64();
+    stats.dbOpsPerSec = r.readF64();
+    stats.gasPerSec = r.readF64();
     return stats;
   }
 
@@ -646,8 +678,9 @@ export class Analytics {
     out.bucketSecs = r.readU32();
     out.headMs = r.readU64();
     const count = <i32>r.readU32();
-    const pts = new Array<i64>(count);
-    for (let i: i32 = 0; i < count && r.ok; i++) pts[i] = r.readI64();
+    // Points are non-negative per-bucket totals: read as u64 (matches the edge `u64 LE` series frame).
+    const pts = new Array<u64>(count);
+    for (let i: i32 = 0; i < count && r.ok; i++) pts[i] = r.readU64();
     out.points = pts;
     return out;
   }

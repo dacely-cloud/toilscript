@@ -301,9 +301,10 @@ declare const enum MetricId {
   ConnectedStreamsAvg = 42, ConnectedStreamsPeak = 43, CommittedMemoryAvg = 44, CommittedMemoryPeak = 45,
 }
 
-/** A dashboard time range for `Analytics.series`. 1h/6h are per-minute; the rest per-hour (30-day). */
+/** A dashboard time range for `Analytics.series`. 1h/6h are per-minute; 60d/90d are per-day (90-day
+ *  retention); the rest are per-hour (30-day). Append-only ids. */
 declare const enum AnalyticsRange {
-  H1 = 0, H6 = 1, H12 = 2, H24 = 3, D3 = 4, D7 = 5, D14 = 6, D30 = 7,
+  H1 = 0, H6 = 1, H12 = 2, H24 = 3, D3 = 4, D7 = 5, D14 = 6, D30 = 7, D60 = 8, D90 = 9,
 }
 
 /** One tenant's analytics snapshot: lifetime totals (indexed by `MetricId`, no string keys), the two
@@ -362,17 +363,28 @@ declare class TenantStats {
   reqMinuteCap: u64;
   reqDayUsed: u64;
   reqDayCap: u64;
+  /** LIVE per-second gauges (rates), computed edge-side from the last completed minute bucket (idle 0.0),
+   *  so no client diffing is needed. `f64` cannot overflow for any real value. */
+  readonly rps: f64;
+  readonly bytesInPerSec: f64;
+  readonly bytesOutPerSec: f64;
+  readonly streamBytesInPerSec: f64;
+  readonly streamBytesOutPerSec: f64;
+  readonly dbOpsPerSec: f64;
+  readonly gasPerSec: f64;
   nowMs: u64;
 }
 
-/** One metric's time series for a range: `points` oldest→newest, `bucketSecs` bucket width,
- *  `headMs` newest bucket end. `ratePerSec(i)` derives the per-second rate of point `i`. */
+/** One metric's time series for a range: `points` oldest→newest (per-bucket totals, `u64`), `bucketSecs`
+ *  bucket width, `headMs` newest bucket end. `ratePerSec(i)` derives the per-second rate of point `i`;
+ *  `sum()` folds the window into an `f64` cumulative (never a `u64` sum -> overflow-safe). */
 declare class Series {
   metric: MetricId;
   bucketSecs: u32;
   headMs: u64;
-  points: i64[];
+  points: u64[];
   ratePerSec(i: i32): f64;
+  sum(): f64;
 }
 
 /** A page of site names from `Analytics.listSites` (dacely.com only). When `hasMore` is
