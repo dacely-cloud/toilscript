@@ -944,15 +944,23 @@ function emitServerSurface(surface: RpcSurface, dataNames: Set<string>): string 
 
 /**
  * Emits the client-side `getUser()` for the `@user` type: it reads the readable
- * `__Secure-toil_user` companion cookie the server set at login, base64url-decodes
- * it, and runs the generated `@user` codec. Fully typed (returns the `@user`
+ * `toil_user` companion cookie the server set at login (the `__Secure-toil_user`
+ * prefixed form over HTTPS; the bare form over plain HTTP / dev -- it reads both),
+ * base64url-decodes it, and runs the generated `@user` codec. Fully typed (returns the `@user`
  * class) with NO type argument. Display-only: the server re-verifies the HttpOnly
  * signed session on every `@auth` request, so this is never an authorization
  * source. Emitted only when the program declares a `@user` class.
  */
 function emitAuthClient(userType: string): string {
   let out = "// ---- @user session client (reads the readable companion cookie) ----\n";
-  out += "const __TOIL_USER_COOKIE = \"__Secure-toil_user\";\n\n";
+  // The server sets the readable companion cookie with a `__Secure-` prefix over
+  // HTTPS, but DROPS the prefix over plain HTTP (dev) -- cookie prefixes require the
+  // Secure attribute, which is HTTPS-only. So the client must read BOTH names, or a
+  // dev (http) session never resolves and the app bounces back to login. A __Secure-
+  // cookie is never even sent over http, so preferring the prefixed name first and
+  // falling back to the bare one is correct on both http and https.
+  out += "const __TOIL_USER_COOKIE = \"__Secure-toil_user\"; // HTTPS (prod)\n";
+  out += "const __TOIL_USER_COOKIE_HTTP = \"toil_user\";       // plain HTTP (dev): no __Secure- prefix\n\n";
   out += "function __toilReadCookie(name: string): string | null {\n";
   out += "    if (typeof document === \"undefined\" || !document.cookie) return null;\n";
   out += "    const pairs = document.cookie.split(\"; \");\n";
@@ -973,14 +981,17 @@ function emitAuthClient(userType: string): string {
   out += "    } catch { return null; }\n";
   out += "}\n\n";
   out += "/**\n";
-  out += " * The signed-in user, decoded from the readable `__Secure-toil_user` companion\n";
-  out += " * cookie the server set at login, or `null`. Auto-typed to your `@user` class\n";
+  out += " * The signed-in user, decoded from the readable `toil_user` companion cookie the\n";
+  out += " * server set at login (prefixed `__Secure-toil_user` over HTTPS), or `null`. Reads\n";
+  out += " * both names so a dev (http) session resolves. Auto-typed to your `@user` class\n";
   out += " * (`" + userType + "`) with no type argument. DISPLAY-ONLY: the server re-verifies\n";
   out += " * the HttpOnly signed session on every `@auth` request; never trust this for\n";
   out += " * authorization (a client can forge it, fooling only its own UI).\n";
   out += " */\n";
   out += "export function getUser(): " + userType + " | null {\n";
-  out += "    const raw = __toilReadCookie(__TOIL_USER_COOKIE);\n";
+  out += "    // Prefixed name (HTTPS/prod) first, then the bare name (plain HTTP/dev). A\n";
+  out += "    // __Secure- cookie is never sent over http, so this resolves correctly on both.\n";
+  out += "    const raw = __toilReadCookie(__TOIL_USER_COOKIE) ?? __toilReadCookie(__TOIL_USER_COOKIE_HTTP);\n";
   out += "    if (raw === null) return null;\n";
   out += "    const bytes = __toilB64UrlDecode(raw);\n";
   out += "    if (bytes === null) return null;\n";
