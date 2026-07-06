@@ -58,10 +58,6 @@ export class FieldLayout {
   name: string = "";
   typeName: string = "";
   isArray: bool = false;
-  // `@unique` on this field: the edge enforces its value unique PER TENANT via a
-  // backing Unique claim on write. Deliberately NOT hashed into schema_version (it
-  // is a constraint, not a wire-layout change), so toggling it never perturbs
-  // versions or triggers a migration.
   unique: bool = false;
 }
 
