@@ -1065,6 +1065,11 @@ export enum DecoratorKind {
   // type. The compiler weaves it into the value type's version-dispatching
   // decoder (lazy, read-time migration); see SCHEMA_MIGRATION_PLAN Phase 3.
   Migrate,
+  // `@unique` marks a FIELD of a `@data`/`@user` class whose value must be globally
+  // unique PER TENANT. The compiler records it (see dbcatalog) so a backing
+  // Unique-family claim can enforce it on write. Field-level, unlike the class /
+  // function decorators around it.
+  Unique,
   Admin,
   // --- streams + daemon (spec 03) ---
   Daemon,       // @daemon       class decorator (L4 entry; at most one per project)
@@ -1175,6 +1180,7 @@ export namespace DecoratorKind {
         }
         case CharCode.u: {
           if (nameStr == "unmanaged") return DecoratorKind.Unmanaged;
+          if (nameStr == "unique") return DecoratorKind.Unique;
           if (nameStr == "unsafe") return DecoratorKind.Unsafe;
           if (nameStr == "user") return DecoratorKind.User;
           break;
