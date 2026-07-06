@@ -125,7 +125,7 @@ function decodeCatalog(p) {
             const nFields = u16();
             const fields = [];
             for (let f = 0; f < nFields; f++) {
-                fields.push({ name: str(), typeName: str(), isArray: u8() !== 0 });
+                fields.push({ name: str(), typeName: str(), isArray: u8() !== 0, unique: u8() !== 0 });
             }
             const nMig = u16();
             const migratableFrom = [];
