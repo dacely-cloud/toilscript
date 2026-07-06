@@ -21,6 +21,7 @@ import {
 
 import {
   buildToilDbCatalog,
+  validateUniqueDecorators,
   buildToilDbTypes,
   buildToilDbRouteKinds,
   buildToilDbRpcKinds,
@@ -820,6 +821,9 @@ export class Compiler extends DiagnosticEmitter {
 
     // ToilDB: embed the collection catalog so the host can build the per-tenant
     // catalog (correct family + schema) at module load. Absent if no `@database`.
+    // Validate @unique placement first, so a misuse is a build error, not a
+    // runtime walker failure at the first write.
+    validateUniqueDecorators(program);
     let toildbCatalog = buildToilDbCatalog(program);
     if (toildbCatalog != null) {
       module.addCustomSection("toildb.catalog", toildbCatalog);

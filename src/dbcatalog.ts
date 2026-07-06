@@ -58,6 +58,11 @@ export class FieldLayout {
   name: string = "";
   typeName: string = "";
   isArray: bool = false;
+  // `@unique` on this field: the edge enforces its value unique PER TENANT via a
+  // backing Unique claim on write. Deliberately NOT hashed into schema_version (it
+  // is a constraint, not a wire-layout change), so toggling it never perturbs
+  // versions or triggers a migration.
+  unique: bool = false;
 }
 
 function fnvByte(h: u32, b: i32): u32 {
@@ -154,7 +159,13 @@ export function recursionTypeMap(sources: Source[]): Map<string, FieldLayout[]> 
       let statement = statements[j];
       if (statement.kind != NodeKind.ClassDeclaration) continue;
       let cls = <ClassDeclaration>statement;
-      if (!hasDeco(cls.decorators, DecoratorKind.Data)) continue;
+      // `@user` is a stored `@data` too (see the catalog layouts loop); keep the
+      // recursion map in lock step with the `toildb.types` registry below.
+      if (
+        !hasDeco(cls.decorators, DecoratorKind.Data) &&
+        !hasDeco(cls.decorators, DecoratorKind.User)
+      )
+        continue;
       let name = cls.name.text;
       if (map.has(name)) continue;
       map.set(name, dataFields(cls));
@@ -180,6 +191,7 @@ export function dataFields(cls: ClassDeclaration): FieldLayout[] {
     let typeName = named.name.identifier.text;
     let fl = new FieldLayout();
     fl.name = field.name.text;
+    fl.unique = decoOf(field.decorators, DecoratorKind.Unique) != null;
     let typeArgs = named.typeArguments;
     if (typeName == "Array" && typeArgs != null && typeArgs.length == 1 && typeArgs[0] instanceof NamedTypeNode) {
       fl.typeName = (<NamedTypeNode>typeArgs[0]).name.identifier.text;
@@ -454,7 +466,14 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
       let statement = statements[j];
       if (statement.kind != NodeKind.ClassDeclaration) continue;
       let cls = <ClassDeclaration>statement;
-      if (!hasDeco(cls.decorators, DecoratorKind.Data)) continue;
+      // A `@user` IS a stored `@data` (same codec) and can be a collection value
+      // type (its profile row), so its layout — including any `@unique` field — must
+      // be emitted too, else the edge can't enforce `@unique` on a `@user`.
+      if (
+        !hasDeco(cls.decorators, DecoratorKind.Data) &&
+        !hasDeco(cls.decorators, DecoratorKind.User)
+      )
+        continue;
       layouts.set(cls.name.text, dataFields(cls));
     }
   }
@@ -594,6 +613,7 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
         w.str(fields[f].name);
         w.str(fields[f].typeName);
         w.u8(fields[f].isArray ? 1 : 0);
+        w.u8(fields[f].unique ? 1 : 0); // @unique constraint (per-field flag)
       }
       let migs = migByValue.has(coll.valueType)
         ? <u32[]>migByValue.get(coll.valueType)
@@ -603,6 +623,57 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
     }
   }
   return w.toBytes();
+}
+
+/** Validate every `@unique` field decorator (spec: field-level uniqueness). It is
+ *  only meaningful on a `string`/`Uint8Array` field of a `@data`/`@user` class -
+ *  exactly the shapes the edge's uniqueness walker can extract and claim. Anything
+ *  else (a scalar, an `Array<T>`, a nested `@data`, or a field on a non-data class)
+ *  is a compile error, so a misuse fails loudly at build time instead of at the
+ *  first write. */
+export function validateUniqueDecorators(program: Program): void {
+  let sources = program.sources;
+  for (let i = 0, k = sources.length; i < k; ++i) {
+    let source = sources[i];
+    if (source.isLibrary) continue;
+    let statements = source.statements;
+    for (let j = 0, l = statements.length; j < l; ++j) {
+      let statement = statements[j];
+      if (statement.kind != NodeKind.ClassDeclaration) continue;
+      let cls = <ClassDeclaration>statement;
+      let isDataOrUser =
+        hasDeco(cls.decorators, DecoratorKind.Data) ||
+        hasDeco(cls.decorators, DecoratorKind.User);
+      let members = cls.members;
+      for (let m = 0, mk = members.length; m < mk; ++m) {
+        let member = members[m];
+        if (member.kind != NodeKind.FieldDeclaration) continue;
+        let field = <FieldDeclaration>member;
+        if (decoOf(field.decorators, DecoratorKind.Unique) == null) continue;
+        if (!isDataOrUser) {
+          program.error(
+            DiagnosticCode.User_defined_0,
+            field.name.range,
+            "@unique is only valid on a field of a @data or @user class"
+          );
+          continue;
+        }
+        let typeNode = field.type;
+        let ok = false;
+        if (typeNode != null && typeNode instanceof NamedTypeNode) {
+          let tn = (<NamedTypeNode>typeNode).name.identifier.text;
+          ok = tn == "string" || tn == "Uint8Array"; // Array is "Array", nested @data is its own name
+        }
+        if (!ok) {
+          program.error(
+            DiagnosticCode.User_defined_0,
+            field.name.range,
+            "@unique requires a string or Uint8Array field (arrays and nested @data are not supported)"
+          );
+        }
+      }
+    }
+  }
 }
 
 // `toildb.types` custom section: the field layout of EVERY `@data` type, so the
@@ -626,7 +697,13 @@ export function buildToilDbTypes(program: Program): Uint8Array | null {
       let statement = statements[j];
       if (statement.kind != NodeKind.ClassDeclaration) continue;
       let cls = <ClassDeclaration>statement;
-      if (!hasDeco(cls.decorators, DecoratorKind.Data)) continue;
+      // Include `@user` types: they can be a collection value type (a profile row),
+      // so the deploy gate must resolve their layout like any other stored `@data`.
+      if (
+        !hasDeco(cls.decorators, DecoratorKind.Data) &&
+        !hasDeco(cls.decorators, DecoratorKind.User)
+      )
+        continue;
       let name = cls.name.text;
       if (fieldsByName.has(name)) continue;
       names.push(name);
