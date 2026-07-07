@@ -27,6 +27,15 @@ declare function main(): void;
 declare function data(target: Function): void;
 
 /**
+ * Marks a FIELD of a `@data` (or `@user`) class as globally unique: the compiler
+ * emits a per-field uniqueness constraint into the collection catalog so the edge
+ * can enforce it on write (via the `Unique` family). Field-level, unlike the class
+ * decorators above; applied bare on a `string` or `Uint8Array` field
+ * (`@unique email: string;`). Arrays and nested `@data` fields are not supported.
+ */
+declare function unique(target: Object, propertyKey: string | symbol): void;
+
+/**
  * Marks a function (free, or a method of an `@service` class) as a client-callable
  * RPC endpoint. The server build emits it onto the typed client `Server` surface.
  */
