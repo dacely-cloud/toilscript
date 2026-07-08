@@ -228,6 +228,7 @@ function dbOpOf(family: string, method: string): string {
       if (method == "exists") return "Exists";
       if (method == "create") return "Create";
       if (method == "patch") return "Patch";
+      if (method == "upsert") return "Upsert";
       if (method == "delete") return "Delete";
       if (method == "getDelete") return "GetDelete";
       return "";
@@ -289,7 +290,7 @@ function dbKindAllows(kind: i32, op: string): bool {
   switch (kind) {
     case DecoratorKind.Query: return isDbReadOp(op) && !isDbScanOp(op);
     case DecoratorKind.Action:
-      return (isDbReadOp(op) && !isDbScanOp(op)) || op == "Create" || op == "Patch" || op == "Delete" ||
+      return (isDbReadOp(op) && !isDbScanOp(op)) || op == "Create" || op == "Patch" || op == "Upsert" || op == "Delete" ||
         op == "GetDelete" || op == "Append" || op == "CounterAdd" || op == "UniqueClaim" ||
         op == "UniqueRelease" || op == "MembershipAdd" || op == "MembershipRemove" ||
         op == "CapacityReserve" || op == "CapacityConfirm" || op == "CapacityCancel";

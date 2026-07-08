@@ -229,6 +229,16 @@ declare function admin(target: Object, propertyKey: string | symbol, descriptor:
 // User>` and `App.users.get(...)`. Every handle is KEY-FIRST (`<K, V>`, matching
 // `Map`/`Record`). `K`/`V`/`M` are `@data` types (the codec the host marshals).
 
+/** The outcome of `Documents.upsert` (spec 8.3). */
+declare const enum UpsertResult {
+  /** The row did not exist and was created. */
+  Created = 0,
+  /** The row already existed and was overwritten. */
+  Updated = 1,
+  /** A `@unique` field value is already owned by another record; nothing written. */
+  Conflict = 2,
+}
+
 /** A mutable keyed-entity collection (spec 7.1): user profiles, items, sessions. */
 declare class Documents<K, V> {
   get(key: K): V | null;
@@ -237,6 +247,13 @@ declare class Documents<K, V> {
   getMany(keys: K[]): (V | null)[];
   create(key: K, value: V): bool;
   patch(key: K, value: V): V;
+  /** Create-or-overwrite in one op (blind last-writer-wins); replaces the two-op
+   *  `if (!create(k,v)) patch(k,v)` idiom. Right for writing a whole value; wrong
+   *  for read-modify-write of accumulating state (a balance/count), where a
+   *  concurrent write would be lost - use `counter.add` or version-checked
+   *  `patch` there. The key is tenant-scoped, so a race is only ever the same
+   *  tenant's own writes. See {@link UpsertResult}. */
+  upsert(key: K, value: V): UpsertResult;
   delete(key: K): void;
   getDelete(key: K): V | null;
 }

@@ -75,6 +75,18 @@ function __toildbTakeGrow(): Uint8Array {
 /// A mutable keyed-entity collection (spec 7.1). `V` is the `@data` value type,
 /// `K` the `@data` key type.
 @global
+/// The outcome of `Documents.upsert` (spec 8.3). The wire bytes are pinned in the
+/// host ABI (`data.upsert`): a non-negative tag the guest returns as-is.
+export enum UpsertResult {
+  /// The row did not exist and was created.
+  Created = 0,
+  /// The row already existed and was overwritten.
+  Updated = 1,
+  /// A `@unique` field value is already owned by a DIFFERENT record; nothing was
+  /// written (the only outcome an upsert cannot auto-resolve).
+  Conflict = 2,
+}
+
 export class Documents<K, V> {
   private __handle: u32;
 
@@ -156,6 +168,30 @@ export class Documents<K, V> {
     return toildbHost.create(
       this.__handle, kb.dataStart, kb.byteLength, vb.dataStart, vb.byteLength, 0
     ) == 0;
+  }
+
+  /// Create-or-overwrite in ONE op (spec 8.3): a blind last-writer-wins put that
+  /// creates the row if absent or overwrites it if present, replacing the two-op
+  /// `if (!create(k,v)) patch(k,v)` idiom. Returns `UpsertResult.Created` or
+  /// `.Updated`; on a `@unique` collection, `.Conflict` when the value's unique
+  /// field is already held by ANOTHER record (nothing is written).
+  ///
+  /// The write is blind: it stores `value` as-is, so concurrent upserts do not
+  /// conflict or retry - the later one wins and overwrites the earlier. Correct
+  /// for writing a whole value (a profile, a settings blob); wrong for a
+  /// read-modify-write of accumulating state (a balance, a like count), where a
+  /// concurrent write would be lost - use `counter.add` or version-checked
+  /// `patch` there. A lost write is a data-integrity concern, not a boundary one:
+  /// the key is tenant-scoped, so a race is only ever one tenant's own concurrent
+  /// writes, and `@unique` stays race-safe (claim-once at the value's home).
+  upsert(key: K, value: V): UpsertResult {
+    const kb = key.encode();
+    const vb = value.encode();
+    const status = toildbHost.upsert(
+      this.__handle, kb.dataStart, kb.byteLength, vb.dataStart, vb.byteLength, 0
+    );
+    if (status < 0) unreachable();
+    return <UpsertResult>status;
   }
 
   /// Apply a write through the key's home cell; returns the stored record.
