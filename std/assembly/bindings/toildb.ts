@@ -71,6 +71,20 @@ export namespace toildbHost {
     idemPtr: usize
   ): i32;
 
+  // record.upsert -> 0 created | 1 updated | 2 @unique-conflict (not written) |
+  // negative error. A single blind last-writer-wins put: creates the row if
+  // absent, overwrites it if present, in ONE op (no create-then-patch round trip).
+  // @ts-ignore: decorator
+  @external("env", "data.upsert")
+  export declare function upsert(
+    handle: u32,
+    keyPtr: usize,
+    keyLen: i32,
+    valPtr: usize,
+    valLen: i32,
+    idemPtr: usize
+  ): i32;
+
   // record.delete -> 0 ok | negative error.
   // @ts-ignore: decorator
   @external("env", "data.delete")
