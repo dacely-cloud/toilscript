@@ -333,9 +333,14 @@ declare const enum AnalyticsRange {
   H1 = 0, H6 = 1, H12 = 2, H24 = 3, D3 = 4, D7 = 5, D14 = 6, D30 = 7, D60 = 8, D90 = 9,
 }
 
+/** The sustained-rate window (seconds): requests are metered over a 3-minute ROLLING window, so a plan's
+ *  sustained rate `X` (rps) permits `X * BURST_WINDOW_SECS` requests across it. */
+declare const BURST_WINDOW_SECS: i32;
+
 /** One tenant's analytics snapshot: lifetime totals (indexed by `MetricId`, no string keys), the two
- *  live gauge levels, and the request windows (current usage + plan cap; cap 0 = unlimited). Read a
- *  value by typed getter (`stats.requests`) or by id (`stats.metric(MetricId.Requests)`). */
+ *  live gauge levels, and the request meters (burst 3-min bucket + 30-day quota, each with its cap;
+ *  cap 0 = unmetered). Read a value by typed getter (`stats.requests`) or by id
+ *  (`stats.metric(MetricId.Requests)`). */
 declare class TenantStats {
   metric(id: MetricId): u64;
   readonly requests: u64;
@@ -385,10 +390,15 @@ declare class TenantStats {
   readonly cacheRatio: f64;
   connectedStreams: u64;
   committedMemory: u64;
-  reqMinuteUsed: u64;
-  reqMinuteCap: u64;
-  reqDayUsed: u64;
-  reqDayCap: u64;
+  /** Fleet-global requests in the trailing 3-minute ROLLING window, and its allowance
+   *  (`sustained_rps * BURST_WINDOW_SECS`; 0 = unmetered). Spikes are NOT tier-capped. */
+  reqBurstUsed: u64;
+  reqBurstCap: u64;
+  /** Fleet-global requests in the current 30-day tumbling bucket, and the 30-day quota (0 = unmetered). */
+  req30dUsed: u64;
+  req30dCap: u64;
+  /** Derived: the plan's SUSTAINED request rate (`reqBurstCap / BURST_WINDOW_SECS`), 0.0 when unmetered. */
+  readonly sustainedRpsCap: f64;
   /** LIVE per-second gauges (rates), computed edge-side from the last completed minute bucket (idle 0.0),
    *  so no client diffing is needed. `f64` cannot overflow for any real value. */
   readonly rps: f64;

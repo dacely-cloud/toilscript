@@ -531,6 +531,14 @@ export enum MetricId {
 /// section.
 export const METRIC_COUNTERS: i32 = 42;
 
+/// The sustained-rate window (seconds): requests are metered over a 3-minute ROLLING window. A plan's
+/// sustained request rate `X` (rps) permits `X * BURST_WINDOW_SECS` requests across it. Instantaneous
+/// spikes ABOVE the sustained rate are NOT tier-capped (only the box firewall's global pps ceiling, the
+/// DDoS backstop, applies); throttling (HTTP 429) begins only once the window's allowance is spent.
+/// The window slides continuously rather than resetting on a boundary, so a spend does not become free
+/// all at once: it ages out gradually over the following 3 minutes.
+export const BURST_WINDOW_SECS: i32 = 180;
+
 /// A dashboard time range for `Analytics.series`. Short ranges (1h/6h) read the per-MINUTE ring; the long
 /// ranges (60d/90d) read the per-DAY ring (90-day retention); the rest read the per-HOUR ring (30-day).
 /// Append-only: never renumber (D60/D90 were added after D30, keeping the wire ids stable).
@@ -556,11 +564,14 @@ export class TenantStats {
   /// Live gauges (current level, not a total).
   connectedStreams: u64 = 0;
   committedMemory: u64 = 0;
-  /// Request windows: current bucket usage + plan cap (0 = unlimited).
-  reqMinuteUsed: u64 = 0;
-  reqMinuteCap: u64 = 0;
-  reqDayUsed: u64 = 0;
-  reqDayCap: u64 = 0;
+  /// Request meters (fleet-global, across every edge location) against the plan (cap 0 = unmetered).
+  /// Burst: requests in the trailing 3-minute ROLLING window vs its allowance
+  /// (`sustained_rps * BURST_WINDOW_SECS`). 30d: requests in the current 30-day bucket vs the quota
+  /// (the quota still tumbles: it is a billing period, not a rate).
+  reqBurstUsed: u64 = 0;
+  reqBurstCap: u64 = 0;
+  req30dUsed: u64 = 0;
+  req30dCap: u64 = 0;
   /// LIVE per-second gauges (rates), computed edge-side from the last completed minute bucket so the
   /// guest is STATELESS (no client diffing of two snapshots). Idle -> 0.0. `f64` (a rate is fractional
   /// and bounded; f64 cannot overflow for any real value).
@@ -636,6 +647,13 @@ export class TenantStats {
     const total = hits + this.cacheMisses;
     return total > 0 ? <f64>hits / <f64>total : 0.0;
   }
+
+  /// The plan's SUSTAINED request rate (requests/second), derived from the 3-minute burst cap
+  /// (`reqBurstCap / BURST_WINDOW_SECS`). 0.0 means unmetered. Spikes above this rate are allowed;
+  /// throttling only starts once `reqBurstUsed` passes `reqBurstCap` in the current bucket.
+  get sustainedRpsCap(): f64 {
+    return this.reqBurstCap == 0 ? 0.0 : <f64>this.reqBurstCap / <f64>BURST_WINDOW_SECS;
+  }
 }
 
 /// One metric's time series for a range: `points` oldest→newest (per-bucket totals, `u64` — non-negative),
@@ -678,7 +696,7 @@ export class Analytics {
     const r = new DataReader(buf);
     const stats = new TenantStats();
     const version = r.readU16();
-    if (version < 2) return stats; // pre-v2 edge: refuse rather than mis-decode
+    if (version < 3) return stats; // pre-v3 edge: refuse rather than mis-decode (clean break, no v2)
     stats.nowMs = r.readU64();
     const count = <i32>r.readU32();
     for (let i: i32 = 0; i < count && r.ok; i++) {
@@ -688,10 +706,10 @@ export class Analytics {
     }
     stats.connectedStreams = r.readU64();
     stats.committedMemory = r.readU64();
-    stats.reqMinuteUsed = r.readU64();
-    stats.reqMinuteCap = r.readU64();
-    stats.reqDayUsed = r.readU64();
-    stats.reqDayCap = r.readU64();
+    stats.reqBurstUsed = r.readU64();
+    stats.reqBurstCap = r.readU64();
+    stats.req30dUsed = r.readU64();
+    stats.req30dCap = r.readU64();
     // LIVE per-second rates (f64), appended after the windows. VERSION-GATE by LENGTH: a pre-rates
     // (shorter) frame from an older edge exhausts the buffer here, so `readF64` returns 0.0 for each
     // missing rate (DataReader is bounds-checked). No frame-version bump needed.
@@ -709,7 +727,7 @@ export class Analytics {
     const r = new DataReader(buf);
     const out = new Series();
     const version = r.readU16();
-    if (version < 2) return out;
+    if (version < 3) return out; // pre-v3 edge: refuse rather than mis-decode (clean break, no v2)
     out.metric = <MetricId>r.readU16();
     out.bucketSecs = r.readU32();
     out.headMs = r.readU64();
