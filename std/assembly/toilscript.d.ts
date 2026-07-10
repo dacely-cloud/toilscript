@@ -441,6 +441,120 @@ declare class Analytics {
   static listSites(cursor?: string, limit?: i32): SiteList;
 }
 
+/**
+ * A typed ToilDB failure (`TDLnnn`, spec 27.1). A read that returns `null` either
+ * found nothing (`Db.lastError() == DbError.None`) or hit one of the four RETRYABLE
+ * availability signals. A HARD FAULT never reaches guest code: the host traps the
+ * request rather than hand back a status the ABI would mistake for a benign result.
+ */
+declare const enum DbError {
+  None = 0,
+  /** TDL001. Hard fault: traps. */ InvalidHandle = 1,
+  /** TDL002. Hard fault: traps. */ TenantMismatch = 2,
+  /** TDL003. A write outcome. */ AlreadyExists = 3,
+  /** TDL004. A write outcome. */ Conflict = 4,
+  /** TDL005. Hard fault: traps. */ Unsupported = 5,
+  /** TDL006. Hard fault: traps. */ Codec = 6,
+  /** TDL007. Hard fault: traps. */ Backend = 7,
+  /** TDL010. Hard fault: traps. */ OpNotAllowedForFamily = 10,
+  /** TDL011. Hard fault: traps. */ OpNotAllowedInKind = 11,
+  /** TDL020. Hard fault: traps. */ OpBudget = 20,
+  /** TDL021. Hard fault: traps. */ ByteBudget = 21,
+  /** TDL022. Hard fault: traps. */ DepthBudget = 22,
+  /** TDL025. Hard fault: traps, so a guest never observes it. */ QuotaExceeded = 25,
+  /** TDL030. Retryable. */ FillThrottled = 30,
+  /** TDL031. Retryable. */ Unavailable = 31,
+  /** TDL040. Retryable. */ HotPartition = 40,
+  /** TDL041. Retryable. */ ColdStorm = 41,
+  /** TDL070. Hard fault: traps. */ SchemaUnavailable = 70,
+  /** TDL090. Hard fault: traps. */ CatalogOutsideAdmin = 90,
+  /** A negative status carrying no known `TDLnnn`. */ Unknown = -1,
+}
+
+/** ToilDB diagnostics: tell an absent row from a failed read. */
+declare class Db {
+  /** The failure recorded by the most recent read that returned `null`. */
+  static lastError(): DbError;
+  /** Decode a raw negative host status into its typed failure. */
+  static errorOf(status: i32): DbError;
+  /** Whether `err` is a transient availability signal worth retrying. */
+  static isRetryable(err: DbError): bool;
+}
+
+// The daemon (L4 cold box) scheduler surface is an ambient global, like the
+// ToilDB handles above (`std/assembly/daemon`). It resolves ONLY inside a
+// `@daemon` cold box: its host imports live in the `daemon` wasm module, which a
+// request handler's module does not get.
+
+/** A typed daemon failure. Positive values are the host's u16 subsystem codes. */
+declare const enum DaemonError {
+  None = 0,
+  /** This node does not hold the lease; the host refused without acting. */
+  NotLeader = 0x0401,
+  /** The lease was lost while the call was in flight. */
+  LeaseLost = 0x0402,
+  /** The outbound request did not complete (SSRF guard, timeout, transport). */
+  CallFailed = 0x0405,
+  /** The response did not fit the buffer. The call ALREADY happened: do not retry. */
+  ResponseTooLarge = -1,
+  /** A request over a host cap (nothing sent), or a malformed response envelope. */
+  BadEnvelope = -2,
+  /** A negative status outside every band above. */
+  Unknown = -3,
+}
+
+/** One `name: value` header of an outbound request or an inbound response. */
+declare class DaemonHttpHeader {
+  name: string;
+  value: string;
+  constructor(name: string, value: string);
+}
+
+/** An outbound HTTP request. `url` must be an absolute `http(s)` URL. */
+declare class DaemonHttpRequest {
+  method: string;
+  url: string;
+  headers: DaemonHttpHeader[];
+  body: Uint8Array;
+  constructor(method?: string, url?: string);
+  /** Append a header. Returns `this` so calls chain. */
+  header(name: string, value: string): DaemonHttpRequest;
+  /** The wire envelope, or `null` when a field breaks a host cap. */
+  encode(): Uint8Array | null;
+}
+
+/** An inbound HTTP response. `status` is 0 when the host failed before a reply. */
+declare class DaemonHttpResponse {
+  status: u16;
+  headers: DaemonHttpHeader[];
+  body: Uint8Array;
+  /** A header's value (case-sensitive, first match), or `null`. */
+  header(name: string): string | null;
+  /** The body decoded as UTF-8. */
+  text(): string;
+  static decode(buf: Uint8Array, len: i32): DaemonHttpResponse | null;
+}
+
+/** The daemon scheduler surface, available inside a `@daemon` class. */
+declare class Daemon {
+  /** Whether THIS node currently holds the lease. A snapshot: re-check it. */
+  static isLeader(): bool;
+  /** The monotonic fencing token, or -1 when this node does not hold the lease. */
+  static epoch(): i64;
+  /** The number of registered `@scheduled` tasks. */
+  static taskCount(): i32;
+  /** The next fire time for `taskId` in epoch ms, or -1 when it never fires. */
+  static nextFireMs(taskId: i32): i64;
+  /** Let the host observe a lost lease. `None` means still leader. */
+  static yieldNow(): DaemonError;
+  /** Park for `ms` (host-clamped to 3s). `LeaseLost` means the task should stop. */
+  static sleep(ms: i64): DaemonError;
+  /** Make an outbound HTTP request, or `null` on failure (see `lastError()`). */
+  static httpCall(request: DaemonHttpRequest, responseCap?: i32): DaemonHttpResponse | null;
+  /** The failure recorded by the most recent `Daemon` call. */
+  static lastError(): DaemonError;
+}
+
 // Big integers, native globals implemented in std/assembly/bignum. The
 // arithmetic/bitwise/comparison operators
 // (+ - * / % & | ^ << >> == != < > <= >=) are operator overloads resolved by

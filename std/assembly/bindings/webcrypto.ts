@@ -103,4 +103,52 @@ export namespace webcrypto {
     paramsLen: i32,
     lengthBits: i32
   ): i32;
+
+  // --- Post-quantum -------------------------------------------------------
+  //
+  // These are NOT WebCrypto: they are the three post-quantum primitives the edge
+  // exposes, under the same `crypto.*` namespace. All are VERIFY / DECAPSULATE
+  // only. The host never generates or holds a long-lived secret on the guest's
+  // behalf, and there is no key handle: every input is passed by (ptr, len).
+
+  // mldsaVerify -> 1 valid, 0 invalid, negative error. `ctx` is the ML-DSA
+  // context string (may be empty).
+  // @ts-ignore: decorator
+  @external("env", "crypto.mldsa_verify")
+  export declare function mldsaVerify(
+    pkPtr: usize,
+    pkLen: i32,
+    msgPtr: usize,
+    msgLen: i32,
+    sigPtr: usize,
+    sigLen: i32,
+    ctxPtr: usize,
+    ctxLen: i32
+  ): i32;
+
+  // mlkemDecapsulate -> 0 on success (the shared secret is written to `outPtr`)
+  // or a negative error. The caller owns `sk`; the host holds no KEM key.
+  // @ts-ignore: decorator
+  @external("env", "crypto.mlkem_decapsulate")
+  export declare function mlkemDecapsulate(
+    ctPtr: usize,
+    ctLen: i32,
+    skPtr: usize,
+    skLen: i32,
+    outPtr: usize
+  ): i32;
+
+  // voprfEvaluate -> 0 on success (the evaluated element is written to `outPtr`)
+  // or a negative error. `seed` is the guest's own OPRF seed.
+  // @ts-ignore: decorator
+  @external("env", "crypto.voprf_evaluate")
+  export declare function voprfEvaluate(
+    seedPtr: usize,
+    seedLen: i32,
+    infoPtr: usize,
+    infoLen: i32,
+    blindedPtr: usize,
+    blindedLen: i32,
+    outPtr: usize
+  ): i32;
 }
