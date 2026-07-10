@@ -301,7 +301,7 @@ export namespace analyticsHost {
   @external("env", "analytics_read")
   export declare function read(domainPtr: usize, domainLen: i32): i32;
 
-  // analytics_series(domain, metricId, range): frame length (v2 series frame) stashed for takeResult,
+  // analytics_series(domain, metricId, range): frame length (v3 series frame) stashed for takeResult,
   // or a negative status (-2 absent / -3 forbidden / bad metric or range).
   // @ts-ignore: decorator
   @external("env", "analytics_series")

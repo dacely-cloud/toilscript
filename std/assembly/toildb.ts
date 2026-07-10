@@ -72,6 +72,151 @@ function __toildbTakeGrow(): Uint8Array {
   return buf.subarray(0, n);
 }
 
+/// A typed ToilDB failure, the `TDLnnn` diagnostic of spec 27.1. The host bridges
+/// one as `-(1000 + nnn)`; the two small sentinels are NOT failures (`-1` output
+/// buffer too small, `-2` absent), so both decode to `None`.
+///
+/// Only a SUBSET can ever reach guest code. A hard fault (budget/quota, storage,
+/// integrity, capability/schema) is indistinguishable from a benign outcome at the
+/// ABI, so returning it would silently drop the op; the host TRAPS the request
+/// instead and the guest never runs again (toil-backend `status_is_hard_fault`).
+/// The members below say which is which. Every code is still listed, because
+/// `Db.errorOf` decodes any raw status.
+///
+/// So after a read returns `null`, `Db.lastError()` is either `None` (the row is
+/// absent) or one of the four RETRYABLE availability signals. `AlreadyExists` and
+/// `Conflict` are write outcomes, not read ones.
+@global
+export enum DbError {
+  /// No failure: the operation succeeded, or the row was simply absent.
+  None = 0,
+  /// TDL001: the collection handle is not one the host issued. HARD FAULT: traps.
+  InvalidHandle = 1,
+  /// TDL002: wrong tenant, or the row's MAC did not verify. HARD FAULT: traps.
+  TenantMismatch = 2,
+  /// TDL003: a `create` found the key already present. A write outcome.
+  AlreadyExists = 3,
+  /// TDL004: a compare-and-set lost, or a `@unique` value is owned elsewhere. A
+  /// write outcome.
+  Conflict = 4,
+  /// TDL005: the operation is not supported here. HARD FAULT: traps.
+  Unsupported = 5,
+  /// TDL006: the value did not decode against its schema. HARD FAULT: traps.
+  Codec = 6,
+  /// TDL007: an internal storage failure. HARD FAULT: traps.
+  Backend = 7,
+  /// TDL010: the op does not exist for this collection family. HARD FAULT: traps.
+  OpNotAllowedForFamily = 10,
+  /// TDL011: the op is not allowed for this kind, or at this tier. HARD FAULT: traps.
+  OpNotAllowedInKind = 11,
+  /// TDL020: too many ops, or too many keys in one multi-op. HARD FAULT: traps.
+  OpBudget = 20,
+  /// TDL021: the request or its result exceeds the byte budget. HARD FAULT: traps.
+  ByteBudget = 21,
+  /// TDL022: the value nests too deeply. HARD FAULT: traps.
+  DepthBudget = 22,
+  /// TDL025: the tenant is over its plan quota. HARD FAULT: traps, so a guest can
+  /// never observe this. It is here only to decode a raw status.
+  QuotaExceeded = 25,
+  /// TDL030: a backfill is throttling this read. RETRYABLE.
+  FillThrottled = 30,
+  /// TDL031: the home region, or the data, is temporarily unavailable. RETRYABLE.
+  Unavailable = 31,
+  /// TDL040: this key is a hot partition. RETRYABLE.
+  HotPartition = 40,
+  /// TDL041: too many cold reads at once. RETRYABLE.
+  ColdStorm = 41,
+  /// TDL070: the schema is temporarily unavailable. HARD FAULT: traps.
+  SchemaUnavailable = 70,
+  /// TDL090: a catalog op outside an admin context. HARD FAULT: traps.
+  CatalogOutsideAdmin = 90,
+  /// A negative status that carries no known `TDLnnn`.
+  Unknown = -1,
+}
+
+/// The typed failure of the last read that returned `null`/empty. See `Db`.
+// @ts-ignore: decorator
+@lazy
+var __toildbLastError: DbError = DbError.None;
+
+/// Decode a raw host status into a typed failure. Non-negative, `-1` (buffer too
+/// small) and `-2` (absent) are all `None`: only the `<= -1000` band is a failure.
+function __toildbErrorOf(status: i32): DbError {
+  if (status >= -2) return DbError.None;
+  const code = -status - 1000;
+  if (code < 0) return DbError.Unknown;
+  switch (code) {
+    case 1: return DbError.InvalidHandle;
+    case 2: return DbError.TenantMismatch;
+    case 3: return DbError.AlreadyExists;
+    case 4: return DbError.Conflict;
+    case 5: return DbError.Unsupported;
+    case 6: return DbError.Codec;
+    case 7: return DbError.Backend;
+    case 10: return DbError.OpNotAllowedForFamily;
+    case 11: return DbError.OpNotAllowedInKind;
+    case 20: return DbError.OpBudget;
+    case 21: return DbError.ByteBudget;
+    case 22: return DbError.DepthBudget;
+    case 25: return DbError.QuotaExceeded;
+    case 30: return DbError.FillThrottled;
+    case 31: return DbError.Unavailable;
+    case 40: return DbError.HotPartition;
+    case 41: return DbError.ColdStorm;
+    case 70: return DbError.SchemaUnavailable;
+    case 90: return DbError.CatalogOutsideAdmin;
+    default: return DbError.Unknown;
+  }
+}
+
+/// Record the outcome of a read that is about to return `null`. An absent row
+/// records `None`, so `null` + `None` means "not found" and `null` + anything else
+/// means "failed".
+function __toildbMiss(status: i32): void {
+  __toildbLastError = __toildbErrorOf(status);
+}
+
+/// ToilDB diagnostics. Read `lastError()` immediately after a read returns `null`
+/// to tell an absent row from a failed one; the next read overwrites it.
+///
+/// ```ts
+/// const u = App.users.get(id);
+/// if (u == null && Db.isRetryable(Db.lastError())) {
+///   // The row may well exist: the store is briefly unavailable. Retry or 503.
+/// }
+/// ```
+///
+/// ONLY `Documents.get`, `Documents.getDelete`, `View.get` and `Unique.lookup`
+/// record into this. Every other ToilDB op either succeeds or traps. The `Analytics`
+/// reads also answer `null`, but on their own `-2 absent` / `-3 forbidden` statuses
+/// rather than a `TDLnnn`, so they leave `lastError()` untouched: do not consult it
+/// after one, or you will read a stale value from an earlier ToilDB read.
+@global
+export class Db {
+  /// The failure recorded by the most recent read that returned `null`. `None`
+  /// when that read simply found nothing.
+  static lastError(): DbError {
+    return __toildbLastError;
+  }
+
+  /// Decode a raw negative host status into its typed failure.
+  static errorOf(status: i32): DbError {
+    return __toildbErrorOf(status);
+  }
+
+  /// Whether `err` is a transient availability signal, so the same read may well
+  /// succeed later. These are the ONLY failures a read can hand back: everything
+  /// else traps the request before the guest resumes.
+  static isRetryable(err: DbError): bool {
+    return (
+      err == DbError.FillThrottled ||
+      err == DbError.Unavailable ||
+      err == DbError.HotPartition ||
+      err == DbError.ColdStorm
+    );
+  }
+}
+
 /// A mutable keyed-entity collection (spec 7.1). `V` is the `@data` value type,
 /// `K` the `@data` key type.
 @global
@@ -98,7 +243,7 @@ export class Documents<K, V> {
   get(key: K): V | null {
     const kb = key.encode();
     const status = toildbHost.get(this.__handle, kb.dataStart, kb.byteLength);
-    if (status < 0) return null;
+    if (status < 0) { __toildbMiss(status); return null; }
     __toildbResetMigrated();
     const v = instantiate<V>();
     v.decodeInto(__toildbTake(status));
@@ -226,7 +371,7 @@ export class Documents<K, V> {
   getDelete(key: K): V | null {
     const kb = key.encode();
     const status = toildbHost.getDelete(this.__handle, kb.dataStart, kb.byteLength, 0);
-    if (status < 0) return null;
+    if (status < 0) { __toildbMiss(status); return null; }
     const v = instantiate<V>();
     v.decodeInto(__toildbTake(status));
     return v;
@@ -249,7 +394,7 @@ export class View<K, V> {
   get(key: K): V | null {
     const kb = key.encode();
     const status = toildbHost.viewGet(this.__handle, kb.dataStart, kb.byteLength);
-    if (status < 0) return null;
+    if (status < 0) { __toildbMiss(status); return null; }
     const v = instantiate<V>();
     v.decodeInto(__toildbTake(status));
     return v;
@@ -295,7 +440,7 @@ export class Unique<K, V> {
   lookup(key: K): V | null {
     const kb = key.encode();
     const status = toildbHost.uniqueLookup(this.__handle, kb.dataStart, kb.byteLength);
-    if (status < 0) return null;
+    if (status < 0) { __toildbMiss(status); return null; }
     const v = instantiate<V>();
     v.decodeInto(__toildbTake(status));
     return v;
