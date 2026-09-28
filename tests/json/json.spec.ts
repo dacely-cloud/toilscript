@@ -203,7 +203,17 @@ function testAccessors(): void {
     assert(JSON.nul().objectKeys().length == 0);
 }
 
+function testLargeStrings(): void {
+    const text = "x".repeat(200000) + "\n\t\"\\" + "😀";
+    const encoded = JSON.of<string>(text).toString();
+    assert(JSON.parse(encoded).asString() == text);
+    assert(JSON.parse('"raw\nnewline"').isError());
+    assert(JSON.parse('"raw\ttab"').isError());
+    assert(JSON.parse('"raw' + String.fromCharCode(0) + 'nul"').isError());
+}
+
 export function runAll(): void {
+    testLargeStrings();
     testFactoriesAndKinds();
     testToString();
     testStringify();

@@ -300,20 +300,26 @@ export class JSON {
     // ---- shared string escaping ----
 
     private static quote(s: string): string {
-        let out = "\"";
+        const out: i32[] = [0x22];
+        const digits = "0123456789abcdef";
         for (let i = 0, len = s.length; i < len; i++) {
             const c = s.charCodeAt(i);
-            if (c == 0x22) out += "\\\"";
-            else if (c == 0x5c) out += "\\\\";
-            else if (c == 0x08) out += "\\b";
-            else if (c == 0x0c) out += "\\f";
-            else if (c == 0x0a) out += "\\n";
-            else if (c == 0x0d) out += "\\r";
-            else if (c == 0x09) out += "\\t";
-            else if (c < 0x20) out += "\\u" + JSON.hex4(c);
-            else out += String.fromCharCode(c);
+            if (c == 0x22 || c == 0x5c) { out.push(0x5c); out.push(c); }
+            else if (c < 0x20) {
+                out.push(0x5c);
+                if (c == 0x08) out.push(0x62);
+                else if (c == 0x0c) out.push(0x66);
+                else if (c == 0x0a) out.push(0x6e);
+                else if (c == 0x0d) out.push(0x72);
+                else if (c == 0x09) out.push(0x74);
+                else {
+                    out.push(0x75);
+                    for (let shift = 12; shift >= 0; shift -= 4) out.push(digits.charCodeAt((c >> shift) & 0xf));
+                }
+            } else out.push(c);
         }
-        return out + "\"";
+        out.push(0x22);
+        return String.fromCharCodes(out);
     }
 
     private static hex4(c: i32): string {
@@ -394,7 +400,7 @@ class Parser {
     /** Read a quoted string starting at the current `"`. Sets err on failure. */
     private readString(): string {
         this.pos++; // opening "
-        let out = "";
+        const out: i32[] = [];
         while (true) {
             if (this.atEnd()) {
                 this.fail("unterminated string");
@@ -408,14 +414,14 @@ class Parser {
                     return "";
                 }
                 const e = this.take();
-                if (e == 0x22) out += "\"";
-                else if (e == 0x5c) out += "\\";
-                else if (e == 0x2f) out += "/";
-                else if (e == 0x62) out += String.fromCharCode(0x08);
-                else if (e == 0x66) out += String.fromCharCode(0x0c);
-                else if (e == 0x6e) out += "\n";
-                else if (e == 0x72) out += "\r";
-                else if (e == 0x74) out += "\t";
+                if (e == 0x22) out.push(0x22);
+                else if (e == 0x5c) out.push(0x5c);
+                else if (e == 0x2f) out.push(0x2f);
+                else if (e == 0x62) out.push(0x08);
+                else if (e == 0x66) out.push(0x0c);
+                else if (e == 0x6e) out.push(0x0a);
+                else if (e == 0x72) out.push(0x0d);
+                else if (e == 0x74) out.push(0x09);
                 else if (e == 0x75) {
                     let code = 0;
                     for (let k = 0; k < 4; k++) {
@@ -426,16 +432,17 @@ class Parser {
                         }
                         code = (code << 4) | d;
                     }
-                    out += String.fromCharCode(code);
+                    out.push(code);
                 } else {
                     this.fail("invalid escape");
                     return "";
                 }
             } else {
-                out += String.fromCharCode(c);
+                if (c < 0x20) { this.fail("unescaped control character"); return ""; }
+                out.push(c);
             }
         }
-        return out;
+        return String.fromCharCodes(out);
     }
 
     private parseNumber(): JSON {
