@@ -230,6 +230,16 @@ export namespace toildbHost {
     idemPtr: usize
   ): i32;
 
+  // Point reads: stashed value length | -2 absent | typed negative error.
+  // result_schema_version exposes the stored event's schema version.
+  // @ts-ignore: decorator
+  @external("env", "data.events_get")
+  export declare function eventsGet(handle: u32, keyPtr: usize, keyLen: i32, evidPtr: usize, evidLen: i32): i32;
+
+  // @ts-ignore: decorator
+  @external("env", "data.events_last")
+  export declare function eventsLast(handle: u32, keyPtr: usize, keyLen: i32): i32;
+
   // events.latest(limit) -> framed-list length (stashed) | negative error.
   // The blob is `u32 count` then per event `u32 schema_version + u32 len + bytes`,
   // newest first.
