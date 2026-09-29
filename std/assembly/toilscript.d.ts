@@ -304,6 +304,11 @@ declare class Counter<K> {
 
 /** An append-only event log (spec 7.5): activity feeds, audit trails. */
 declare class Events<K, V> {
+  /** Read an event by its appendOnce eventId, or null if absent. */
+  get(key: K, eventId: string): V | null;
+  /** Read the newest appended event, or null for an empty stream. */
+  last(key: K): V | null;
+  appendOnce(key: K, eventId: string, event: V): bool;
   append(key: K, event: V): void;
   latest(key: K, limit: i32): V[];
   since(key: K, limit: i32): V[];

@@ -186,7 +186,8 @@ function __toildbMiss(status: i32): void {
 /// }
 /// ```
 ///
-/// ONLY `Documents.get`, `Documents.getDelete`, `View.get` and `Unique.lookup`
+/// `Documents.get`, `Documents.getDelete`, `View.get`, `Unique.lookup`,
+/// `Events.get` and `Events.last`
 /// record into this. Every other ToilDB op either succeeds or traps. The `Analytics`
 /// reads also answer `null`, but on their own `-2 absent` / `-3 forbidden` statuses
 /// rather than a `TDLnnn`, so they leave `lastError()` untouched: do not consult it
@@ -942,6 +943,27 @@ export class Events<K, V> {
 
   constructor(handle: u32) {
     this.__handle = handle;
+  }
+
+  /// Read an event by its appendOnce eventId, or null if absent. Bounded request-path read.
+  get(key: K, eventId: string): V | null {
+    const kb = key.encode();
+    const idb = Uint8Array.wrap(String.UTF8.encode(eventId));
+    const status = toildbHost.eventsGet(this.__handle, kb.dataStart, kb.byteLength, idb.dataStart, idb.byteLength);
+    if (status < 0) { __toildbMiss(status); return null; }
+    const v = instantiate<V>();
+    v.decodeInto(__toildbTake(status));
+    return v;
+  }
+
+  /// Read the newest appended event, or null for an empty stream. Does not scan.
+  last(key: K): V | null {
+    const kb = key.encode();
+    const status = toildbHost.eventsLast(this.__handle, kb.dataStart, kb.byteLength);
+    if (status < 0) { __toildbMiss(status); return null; }
+    const v = instantiate<V>();
+    v.decodeInto(__toildbTake(status));
+    return v;
   }
 
   /// Append an event to the stream.

@@ -251,6 +251,8 @@ function dbOpOf(family: string, method: string): string {
       return "";
     }
     case "Events": {
+      if (method == "get") return "EventsGet";
+      if (method == "last") return "EventsLast";
       if (method == "append") return "Append";
       if (method == "latest") return "Latest";
       if (method == "since") return "EventsSince";
@@ -277,7 +279,7 @@ function dbOpOf(family: string, method: string): string {
 
 function isDbReadOp(op: string): bool {
   return op == "Get" || op == "GetMany" || op == "Exists" || op == "ViewGet" ||
-    op == "CounterGet" || op == "UniqueLookup" || op == "Latest" || op == "EventsSince" ||
+    op == "EventsGet" || op == "EventsLast" || op == "CounterGet" || op == "UniqueLookup" || op == "Latest" || op == "EventsSince" ||
     op == "MembershipContains" || op == "MembershipList" || op == "CapacityAvailable";
 }
 
