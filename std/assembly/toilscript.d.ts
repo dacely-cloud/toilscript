@@ -275,6 +275,8 @@ declare class ClaimResult<V> {
 /** A globally-unique claim collection (spec 7.6): usernames, emails, slugs. */
 declare class Unique<K, V> {
   lookup(key: K): V | null;
+  /** Bounded owner lookup in input order; null for unclaimed keys. */
+  lookupMany(keys: K[]): Array<V | null>;
   claim(key: K, value: V): ClaimResult<V>;
   release(key: K, value: V): void;
 }

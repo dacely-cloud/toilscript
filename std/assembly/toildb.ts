@@ -447,6 +447,12 @@ export class Unique<K, V> {
     return v;
   }
 
+  /// Bounded owner lookup in input order, with null for each unclaimed key.
+  /// Uses one read operation; the host enforces the per-request batch limit.
+  lookupMany(keys: K[]): Array<V | null> {
+    return new Documents<K, V>(this.__handle).getMany(keys);
+  }
+
   /// Claim `key` for `value`. Returns whether the caller owns it, and (when
   /// another owns it) who.
   claim(key: K, value: V): ClaimResult<V> {
