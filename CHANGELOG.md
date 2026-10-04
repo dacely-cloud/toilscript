@@ -2,7 +2,9 @@
 
 ## [v0.1.63] - 2026-10-04
 
-- No changes
+- Add request-safe Events `get` and `last` point reads with stored-schema decoding.
+- Add bounded Unique `lookupMany` batch owner lookup.
+- Declare Documents `enqueue` in the ambient TypeScript API, test TypeScript/WASM parity, and clarify write acceptance semantics.
 
 
 ## [v0.1.62] - 2026-09-28
