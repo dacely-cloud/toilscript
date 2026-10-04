@@ -250,10 +250,13 @@ declare class Documents<K, V> {
   /** Create-or-overwrite in one op (blind last-writer-wins); replaces the two-op
    *  `if (!create(k,v)) patch(k,v)` idiom. Right for writing a whole value; wrong
    *  for read-modify-write of accumulating state (a balance/count), where a
-   *  concurrent write would be lost - use `counter.add` or version-checked
-   *  `patch` there. The key is tenant-scoped, so a race is only ever the same
-   *  tenant's own writes. See {@link UpsertResult}. */
+   *  concurrent write would be lost - use `counter.add` or a caller-observed
+   *  conditional write there. The key is tenant-scoped, so a race is only ever
+   *  the same tenant's own writes. See {@link UpsertResult}. */
   upsert(key: K, value: V): UpsertResult;
+  /** Submit a replacement of an existing record; true when accepted, false on
+   *  absence or rejection. Does not compare against an earlier application read. */
+  enqueue(key: K, value: V): bool;
   delete(key: K): void;
   getDelete(key: K): V | null;
 }

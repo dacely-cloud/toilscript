@@ -326,8 +326,9 @@ export class Documents<K, V> {
   /// conflict or retry - the later one wins and overwrites the earlier. Correct
   /// for writing a whole value (a profile, a settings blob); wrong for a
   /// read-modify-write of accumulating state (a balance, a like count), where a
-  /// concurrent write would be lost - use `counter.add` or version-checked
-  /// `patch` there. A lost write is a data-integrity concern, not a boundary one:
+  /// concurrent write would be lost - use `counter.add` or a caller-observed
+  /// conditional write there. A lost write is a data-integrity concern, not a
+  /// boundary one:
   /// the key is tenant-scoped, so a race is only ever one tenant's own concurrent
   /// writes, and `@unique` stays race-safe (claim-once at the value's home).
   upsert(key: K, value: V): UpsertResult {
@@ -353,9 +354,9 @@ export class Documents<K, V> {
     return v;
   }
 
-  /// Atomically replace an EXISTING record's value, version-checked: returns true
-  /// if applied, false if a concurrent write changed the record first (optimistic
-  /// concurrency - re-read and retry) or the record is absent.
+  /// Submit a replacement of an EXISTING record: true when accepted, false on
+  /// absence or rejection. The ABI carries no caller-observed version or value,
+  /// so this cannot protect a read-modify-write based on an earlier application read.
   enqueue(key: K, value: V): bool {
     const kb = key.encode();
     const vb = value.encode();
