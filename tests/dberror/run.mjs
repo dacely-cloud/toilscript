@@ -37,6 +37,7 @@ class User {
 @database
 class App {
   @collection static users: Documents<Key, User>;
+  @collection static pages: View<Key, User>;
 }
 
 /// A read that misses returns null; the typed reason is Db.lastError().
@@ -45,6 +46,22 @@ export function readMiss(): i32 {
   if (v != null) return -1;
   return <i32>Db.lastError();
 }
+
+export function readBatch(): i32 {
+  App.users.getMany([new Key("alice")]);
+  return 0;
+}
+
+export function cas(expectMissing: bool): bool {
+  const value = new User(); value.name = "new";
+  const expected = new User(); expected.name = "old";
+  return App.users.compareExchange(new Key("alice"), expectMissing ? null : expected, value);
+}
+
+export function publishPage(): void { App.pages.publish(new Key("alice"), new User()); }
+export function deletePage(): void { App.pages.delete(new Key("alice")); }
+
+export function logMessage(): bool { return Log.info("hello server"); }
 
 /// The pure status decoder, across every band.
 export function pureDecode(): i32 {
@@ -97,6 +114,10 @@ if (compile.status !== 0) fail("COMPILE FAILED");
 
 let memory = null;
 let getStatus = -2;
+let casStatus = 1;
+let casExpectedLen = 0;
+let logged = "";
+let viewStatus = 0;
 function readString(ptr) {
     if (!ptr || !memory) return "";
     const u32 = new Uint32Array(memory.buffer);
@@ -116,6 +137,18 @@ const imports = {
             new DataView(memory.buffer).setUint32(outHandlePtr, 1, true);
             return 0;
         },
+        "data.view_publish"() { return viewStatus; },
+        "data.view_delete"() { return viewStatus; },
+        server_log(level, ptr, len) {
+            if (level !== 0) throw new Error("wrong log level");
+            logged = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len));
+            return 1;
+        },
+        "data.compare_exchange"(_h, _kp, _kl, _ep, el) {
+            casExpectedLen = el;
+            return casStatus;
+        },
+        "data.get_many"() { return getStatus; },
         "data.get"() {
             return getStatus;
         },
@@ -154,6 +187,28 @@ const check = (name, got, want) => {
     if (!ok) failures++;
     console.log(`  ${ok ? "ok  " : "FAIL"} ${name}${ok ? "" : `: got ${got}, want ${want}`}`);
 };
+
+getStatus = -1020;
+try { x.readBatch(); fail("batch failure did not abort"); }
+catch (e) { check("batch abort includes status and key count", /getMany failed: status -1020.*keys=1/.test(String(e)), true); }
+casStatus = 1;
+check("CAS applied", x.cas(1), 1);
+check("CAS absence uses expectedLen=-1", casExpectedLen, -1);
+casStatus = 0;
+check("CAS mismatch", x.cas(0), 0);
+check("CAS existing encodes the caller expectation", casExpectedLen > 0, true);
+casStatus = -1031;
+try { x.cas(1); fail("CAS failure did not abort"); }
+catch (e) { check("CAS abort retains host status", /compareExchange failed: status -1031/.test(String(e)), true); }
+viewStatus = 0;
+x.publishPage(); x.deletePage();
+viewStatus = -(0x10000 + 0x0402);
+for (const operation of [x.publishPage, x.deletePage]) {
+    try { operation(); fail("fenced view write did not abort"); }
+    catch (e) { check("fenced view write aborts before a fold can commit", /ToilDB view\.(publish|delete) failed: status -66562/.test(String(e)), true); }
+}
+check("Log emits successfully", x.logMessage(), 1);
+check("Log passes UTF-8 to the server import", logged, "hello server");
 
 check("pure status decoder", x.pureDecode(), 0);
 check("isRetryable classifies the returnable set", x.retryClassification(), 0);

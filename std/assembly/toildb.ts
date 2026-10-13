@@ -233,6 +233,14 @@ export enum UpsertResult {
   Conflict = 2,
 }
 
+/// An observed value plus its original storage bytes (before decoding/migration).
+/// Keep the snapshot unchanged while constructing a replacement value.
+@global
+export class DocumentSnapshot<V> {
+  constructor(public value: V, public encoded: Uint8Array) {}
+}
+
+@global
 export class Documents<K, V> {
   private __handle: u32;
 
@@ -259,6 +267,47 @@ export class Documents<K, V> {
     return v;
   }
 
+  /// Read without rewrite-on-read. Retains the exact bytes for conditional writes,
+  /// including records whose codec or schema migrated during decoding.
+  getSnapshot(key: K): DocumentSnapshot<V> | null {
+    const kb = key.encode();
+    const status = toildbHost.get(this.__handle, kb.dataStart, kb.byteLength);
+    if (status < 0) { __toildbMiss(status); return null; }
+    const bytes = __toildbTake(status);
+    const value = instantiate<V>();
+    value.decodeInto(bytes);
+    return new DocumentSnapshot<V>(value, bytes);
+  }
+
+  /// Owner-authoritative snapshot, bypassing replica and request caches.
+  getCurrentSnapshot(key: K): DocumentSnapshot<V> | null {
+    const kb = key.encode();
+    const status = toildbHost.getCurrent(this.__handle, kb.dataStart, kb.byteLength);
+    if (status < 0) { __toildbMiss(status); return null; }
+    const bytes = __toildbTake(status);
+    const value = instantiate<V>();
+    value.decodeInto(bytes);
+    return new DocumentSnapshot<V>(value, bytes);
+  }
+
+  compareExchangeSnapshot(key: K, expected: DocumentSnapshot<V> | null, value: V): bool {
+    const kb = key.encode();
+    const vb = value.encode();
+    const eb = expected == null ? new Uint8Array(0) : expected.encoded;
+    const status = toildbHost.compareExchange(this.__handle, kb.dataStart, kb.byteLength,
+      eb.dataStart, expected == null ? -1 : eb.byteLength, vb.dataStart, vb.byteLength);
+    if (status < 0) abort("ToilDB compareExchange failed: status " + status.toString(), "toildb", 0, 0);
+    return status == 1;
+  }
+
+  compareDeleteSnapshot(key: K, expected: DocumentSnapshot<V>): bool {
+    const kb = key.encode();
+    const eb = expected.encoded;
+    const status = toildbHost.compareDelete(this.__handle, kb.dataStart, kb.byteLength, eb.dataStart, eb.byteLength);
+    if (status < 0) abort("ToilDB compareDelete failed: status " + status.toString(), "toildb", 0, 0);
+    return status == 1;
+  }
+
   /// Like `get`, but traps if the record is absent.
   require(key: K): V {
     const v = this.get(key);
@@ -276,7 +325,13 @@ export class Documents<K, V> {
     }
     const blob = w.toBytes();
     const status = toildbHost.getMany(this.__handle, blob.dataStart, blob.byteLength);
-    if (status < 0) unreachable();
+    if (status < 0) {
+      __toildbMiss(status);
+      abort("ToilDB getMany failed: status " + status.toString() +
+        "; DbError=" + (<i32>Db.lastError()).toString() +
+        "; keys=" + keys.length.toString() +
+        ". Query accepts 32 keys, Action 64, background 1024; split larger batches.", "toildb", 0, 0);
+    }
     const out = __toildbTake(status);
     const results = new Array<V | null>();
     let off: i32 = 0;
@@ -354,6 +409,21 @@ export class Documents<K, V> {
     return v;
   }
 
+  /// Replace only if the stored bytes equal `expected`; null expects absence.
+  /// Returns false on a mismatch. Routed to the owner; @unique values are rejected.
+  compareExchange(key: K, expected: V | null, value: V): bool {
+    const kb = key.encode();
+    const vb = value.encode();
+    const eb = expected == null ? new Uint8Array(0) : expected.encode();
+    const status = toildbHost.compareExchange(
+      this.__handle, kb.dataStart, kb.byteLength,
+      eb.dataStart, expected == null ? -1 : eb.byteLength,
+      vb.dataStart, vb.byteLength
+    );
+    if (status < 0) abort("ToilDB compareExchange failed: status " + status.toString(), "toildb", 0, 0);
+    return status == 1;
+  }
+
   /// Submit a replacement of an EXISTING record: true when accepted, false on
   /// absence or rejection. The ABI carries no caller-observed version or value,
   /// so this cannot protect a read-modify-write based on an earlier application read.
@@ -363,10 +433,16 @@ export class Documents<K, V> {
     return toildbHost.enqueue(this.__handle, kb.dataStart, kb.byteLength, vb.dataStart, vb.byteLength, 0) == 0;
   }
 
+  /// Delete only when the stored bytes still equal the caller's expectation.
+  compareDelete(key: K, expected: V): bool {
+    return this.compareDeleteSnapshot(key, new DocumentSnapshot<V>(expected, expected.encode()));
+  }
+
   /// Delete the record (idempotent).
   delete(key: K): void {
     const kb = key.encode();
-    toildbHost.del(this.__handle, kb.dataStart, kb.byteLength, 0);
+    const status = toildbHost.del(this.__handle, kb.dataStart, kb.byteLength, 0);
+    if (status < 0) abort("ToilDB delete failed: status " + status.toString(), "toildb", 0, 0);
   }
 
   /// Atomic fetch-and-delete (consume-once); returns the prior value or `null`.
@@ -409,14 +485,22 @@ export class View<K, V> {
     return v!;
   }
 
+  /// Remove a projection key. Delete its source personal data before rebuilding.
+  delete(key: K): void {
+    const kb = key.encode();
+    const status = toildbHost.viewDelete(this.__handle, kb.dataStart, kb.byteLength, 0);
+    if (status < 0) abort("ToilDB view.delete failed: status " + status.toString(), "toildb", 0, 0);
+  }
+
   /// Publish (overwrite) the view for `key`. Derive/job only; the host assigns
   /// the version so a later publish always supersedes an earlier one.
   publish(key: K, value: V): void {
     const kb = key.encode();
     const vb = value.encode();
-    toildbHost.viewPublish(
+    const status = toildbHost.viewPublish(
       this.__handle, kb.dataStart, kb.byteLength, vb.dataStart, vb.byteLength, 0
     );
+    if (status < 0) abort("ToilDB view.publish failed: status " + status.toString(), "toildb", 0, 0);
   }
 }
 
@@ -483,6 +567,17 @@ export class Unique<K, V> {
   }
 }
 
+/// A page in encoded-member order; pass cursor to listPage to continue.
+@global
+export class MembershipPage<M> {
+  members: M[];
+  cursor: Uint8Array | null;
+  constructor(members: M[], cursor: Uint8Array | null) {
+    this.members = members;
+    this.cursor = cursor;
+  }
+}
+
 /// An unordered set (spec 7.3): followers, tags, ACLs, room members. `M` is the
 /// `@data` member type, `K` the `@data` set-key type.
 @global
@@ -518,6 +613,36 @@ export class Membership<K, M> {
     toildbHost.membershipRemove(
       this.__handle, kb.dataStart, kb.byteLength, mb.dataStart, mb.byteLength, 0
     );
+  }
+
+  /// Read members strictly after an opaque cursor. A full page may require an
+  /// empty final page to establish the end. Pagination is not a snapshot.
+  listPage(key: K, limit: i32, cursor: Uint8Array | null = null): MembershipPage<M> {
+    const kb = key.encode();
+    const cb = cursor == null ? new Uint8Array(0) : cursor;
+    const status = toildbHost.membershipPage(
+      this.__handle, kb.dataStart, kb.byteLength, cb.dataStart,
+      cursor == null ? -1 : cb.byteLength, limit
+    );
+    if (status < 0) abort("ToilDB membership.listPage failed: status " + status.toString(), "toildb", 0, 0);
+    const blob = __toildbTake(status);
+    const out = new Array<M>();
+    let off: i32 = 4;
+    const count = load<u32>(blob.dataStart);
+    for (let i: u32 = 0; i < count; i++) {
+      const version = <i64>load<u32>(blob.dataStart + off); off += 4;
+      const len = <i32>load<u32>(blob.dataStart + off); off += 4;
+      const member = instantiate<M>();
+      member.decodeIntoVersioned(blob.subarray(off, off + len), version);
+      out.push(member); off += len;
+    }
+    const hasCursor = load<u8>(blob.dataStart + off); off++;
+    let next: Uint8Array | null = null;
+    if (hasCursor != 0) {
+      const len = <i32>load<u32>(blob.dataStart + off); off += 4;
+      next = blob.slice(off, off + len);
+    }
+    return new MembershipPage<M>(out, next);
   }
 
   /// Up to `limit` members of the set. Decodes each framed member into an `M`.
@@ -945,11 +1070,69 @@ export class Analytics {
 /// fact stream a `@derive` consumes. `V` is the `@data` event type, `K` the
 /// `@data` stream-key type.
 @global
+export class EventRef {
+  constructor(public sequence: u64 = 0, public hlc: u64 = 0) {}
+}
+
+@global
+export class EventEntry<V> {
+  constructor(public reference: EventRef, public value: V) {}
+}
+
+@global
+export class EventPage<V> {
+  constructor(public entries: Array<EventEntry<V>>, public cursor: u64, public hasMore: bool) {}
+}
+
+@global
 export class Events<K, V> {
   private __handle: u32;
 
   constructor(handle: u32) {
     this.__handle = handle;
+  }
+
+  /// Read an appendOnce reference, including during pending cleanup. No payload is returned.
+  reference(key: K, eventId: string): EventRef | null {
+    const kb = key.encode();
+    const id = Uint8Array.wrap(String.UTF8.encode(eventId));
+    const status = toildbHost.eventsReference(this.__handle, kb.dataStart, kb.byteLength, id.dataStart, id.byteLength);
+    if (status < 0) { __toildbMiss(status); return null; }
+    const reader = new DataReader(__toildbTake(status));
+    const reference = new EventRef(reader.readU64(), reader.readU64());
+    if (!reader.ok) abort("Invalid event reference", "toildb", 0, 0);
+    return reference;
+  }
+
+  /// Erase this entry and one bounded page of recovery copies. Repeat in later
+  /// background calls until true. The payload is hidden from the first successful call.
+  redact(key: K, reference: EventRef): bool {
+    const kb = key.encode();
+    const status = toildbHost.eventsRedact(this.__handle, kb.dataStart, kb.byteLength, reference.sequence, reference.hlc);
+    if (status < 0) abort("ToilDB events.redact failed: status " + status.toString(), "toildb", 0, 0);
+    return status == 1;
+  }
+
+  /// Bounded, oldest-first page with references for ordinary and appendOnce events.
+  /// Keep the opaque cursor and use hasMore even if an erased page is empty.
+  entries(key: K, limit: i32 = 128, after: u64 = 0): EventPage<V> {
+    const kb = key.encode();
+    const status = toildbHost.eventsEntries(this.__handle, kb.dataStart, kb.byteLength, limit, after);
+    if (status < 0) abort("ToilDB events.entries failed: status " + status.toString(), "toildb", 0, 0);
+    const reader = new DataReader(__toildbTake(status));
+    const count = reader.readU32();
+    const entries = new Array<EventEntry<V>>();
+    for (let i: u32 = 0; i < count; i++) {
+      const reference = new EventRef(reader.readU64(), reader.readU64());
+      const version = <i64>reader.readU32();
+      const bytes = reader.readBytes();
+      const value = instantiate<V>(); value.decodeIntoVersioned(bytes, version);
+      entries.push(new EventEntry<V>(reference, value));
+    }
+    const hasMore = reader.readU8() != 0;
+    const cursor: u64 = hasMore ? reader.readU64() : 0;
+    if (!reader.ok) abort("Invalid event page", "toildb", 0, 0);
+    return new EventPage<V>(entries, cursor, hasMore);
   }
 
   /// Read an event by its appendOnce eventId, or null if absent. Bounded request-path read.

@@ -1595,7 +1595,7 @@ class DeriveEntry {
  *    u16 format_version = 1
  *    u16 n_derives
  *    per derive:
- *      u16 derive_id          (global declaration order in the hot/default module)
+ *      u16 derive_id          (global declaration order in the compiled artifact)
  *      str db_name            (the @database class name; the write -> derive key)
  *      str method_name        (the @derive method, for diagnostics)
  */

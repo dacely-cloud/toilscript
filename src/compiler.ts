@@ -855,12 +855,10 @@ export class Compiler extends DiagnosticEmitter {
       // hot/default request: any @stream class -> toilstream.catalog.
       let streamCat = buildToilStreamCatalog(program);
       if (streamCat != null) module.addCustomSection("toilstream.catalog", streamCat);
-      // Materialized-view wiring: a @database with @derive methods -> toildb.derives.
-      // The dev runtime (and edge runner) reads this to map a source-collection
-      // write back to the derives it must re-run under FunctionKind=Derive.
-      let derives = buildToilDbDerives(program);
-      if (derives != null) module.addCustomSection("toildb.derives", derives);
     }
+    // Materializers are carried by both request and cold artifacts.
+    let derives = buildToilDbDerives(program);
+    if (derives != null) module.addCustomSection("toildb.derives", derives);
     if (targetMode == "cold") {
       // cold: a @daemon class -> toildaemon.catalog (parses @scheduled specs,
       // may fire diagnostics 9010/9011).
@@ -1795,6 +1793,13 @@ export class Compiler extends DiagnosticEmitter {
     // imported function
     } else if (instance.is(CommonFlags.Ambient)) {
       mangleImportName(instance, declarationNode); // TODO: check for duplicates
+      if (this.options.targetMode == "cold" && mangleImportName_moduleName == "env" &&
+          mangleImportName_elementName.startsWith("console.")) {
+        this.error(
+          DiagnosticCode.Host_import_0_is_not_available_in_a_cold_daemon_artifact_use_the_server_Log_API,
+          declarationNode.range, mangleImportName_elementName
+        );
+      }
       this.program.markModuleImport(mangleImportName_moduleName, mangleImportName_elementName, instance);
       module.addFunctionImport(
         instance.internalName,

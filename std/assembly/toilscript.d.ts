@@ -240,6 +240,12 @@ declare const enum UpsertResult {
 }
 
 /** A mutable keyed-entity collection (spec 7.1): user profiles, items, sessions. */
+declare class DocumentSnapshot<V> {
+  value: V;
+  encoded: Uint8Array;
+  constructor(value: V, encoded: Uint8Array);
+}
+
 declare class Documents<K, V> {
   get(key: K): V | null;
   require(key: K): V;
@@ -247,6 +253,14 @@ declare class Documents<K, V> {
   getMany(keys: K[]): (V | null)[];
   create(key: K, value: V): bool;
   patch(key: K, value: V): V;
+  /** Replace if stored bytes equal expected; null expects absence. Owner-cell only,
+   *  rejects @unique values. False on mismatch; other failures abort. */
+  compareExchange(key: K, expected: V | null, value: V): bool;
+  compareDelete(key: K, expected: V): bool;
+  getSnapshot(key: K): DocumentSnapshot<V> | null;
+  getCurrentSnapshot(key: K): DocumentSnapshot<V> | null;
+  compareExchangeSnapshot(key: K, expected: DocumentSnapshot<V> | null, value: V): bool;
+  compareDeleteSnapshot(key: K, expected: DocumentSnapshot<V>): bool;
   /** Create-or-overwrite in one op (blind last-writer-wins); replaces the two-op
    *  `if (!create(k,v)) patch(k,v)` idiom. Right for writing a whole value; wrong
    *  for read-modify-write of accumulating state (a balance/count), where a
@@ -265,6 +279,7 @@ declare class Documents<K, V> {
 declare class View<K, V> {
   get(key: K): V | null;
   require(key: K): V;
+  delete(key: K): void;
   publish(key: K, value: V): void;
 }
 
@@ -284,12 +299,20 @@ declare class Unique<K, V> {
   release(key: K, value: V): void;
 }
 
+/** A page in encoded-member byte order, with an opaque continuation cursor. */
+declare class MembershipPage<M> {
+  members: M[];
+  cursor: Uint8Array | null;
+  constructor(members: M[], cursor: Uint8Array | null);
+}
+
 /** An unordered set (spec 7.3): followers, tags, ACLs, room members. */
 declare class Membership<K, M> {
   contains(key: K, member: M): bool;
   add(key: K, member: M): void;
   remove(key: K, member: M): void;
   list(key: K, limit: i32): M[];
+  listPage(key: K, limit: i32, cursor?: Uint8Array | null): MembershipPage<M>;
 }
 
 /** A finite, strongly-consistent resource via escrow (spec 7.7): stock, seats. */
@@ -308,7 +331,17 @@ declare class Counter<K> {
 }
 
 /** An append-only event log (spec 7.5): activity feeds, audit trails. */
+declare class EventRef {
+  sequence: u64;
+  hlc: u64;
+  constructor(sequence?: u64, hlc?: u64);
+}
+declare class EventEntry<V> { reference: EventRef; value: V; constructor(reference: EventRef, value: V); }
+declare class EventPage<V> { entries: EventEntry<V>[]; cursor: u64; hasMore: bool; constructor(entries: EventEntry<V>[], cursor: u64, hasMore: bool); }
 declare class Events<K, V> {
+  reference(key: K, eventId: string): EventRef | null;
+  redact(key: K, reference: EventRef): bool;
+  entries(key: K, limit?: i32, after?: u64): EventPage<V>;
   /** Read an event by its appendOnce eventId, or null if absent. */
   get(key: K, eventId: string): V | null;
   /** Read the newest appended event, or null for an empty stream. */
@@ -871,4 +904,12 @@ declare class JSON {
 
   /** Serialize this value tree to a JSON string. */
   toString(): string;
+}
+
+/** Server logging. At most 4096 UTF-8 bytes/message, 32 messages per call.
+ *  Returns false when the message allowance is exhausted. */
+declare class Log {
+  static info(message: string): bool;
+  static warn(message: string): bool;
+  static error(message: string): bool;
 }
