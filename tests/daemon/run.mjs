@@ -7,7 +7,7 @@
 //      resolves in a dev emulator and trap-stubs at the edge), and
 //   2. the `http_call` request/response envelopes are byte-compatible with the
 //      host framing, in both directions.
-import { readFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,37 @@ if (compile.status !== 0) {
     rmSync(tmp, { recursive: true, force: true });
     process.exit(1);
 }
+
+// Console must fail during compilation even when reached through a helper.
+const consoleApp = join(tmp, "console.ts");
+writeFileSync(consoleApp, `function helper(): void { console.log("start"); }
+@daemon class Jobs { onStart(): void { helper(); } }`);
+const rejected = spawnSync("node", [join(root, "bin", "toilscript.js"), consoleApp, "-o", join(tmp, "bad.wasm"), "--runtime", "stub", "--targetMode", "cold"], { encoding: "utf8" });
+if (rejected.status === 0 || !/9018.*|not available in a cold daemon artifact/.test(rejected.stdout + rejected.stderr)) {
+    throw new Error("cold console import was not rejected with an actionable compile diagnostic");
+}
+const logApp = join(tmp, "log.ts");
+const logOut = join(tmp, "log.wasm");
+writeFileSync(logApp, `@daemon class Jobs { onStart(): void { Log.info("daemon ready"); } }`);
+const logged = spawnSync("node", [join(root, "bin", "toilscript.js"), logApp, "-o", logOut, "--runtime", "stub", "--targetMode", "cold"], { encoding: "utf8" });
+if (logged.status !== 0) throw new Error(logged.stdout + logged.stderr);
+const logModule = new WebAssembly.Module(readFileSync(logOut));
+if (!WebAssembly.Module.imports(logModule).some(i => i.module === "env" && i.name === "server_log"))
+    throw new Error("daemon Log did not use the server ABI");
+let loggedText = "";
+let logMemory = null;
+const logInstance = new WebAssembly.Instance(logModule, { env: {
+    abort: () => { throw new Error("Log daemon aborted"); },
+    server_log: (level, ptr, len) => {
+        if (level !== 0) throw new Error("wrong daemon log level");
+        loggedText = new TextDecoder().decode(new Uint8Array(logMemory.buffer, ptr, len));
+        return 1;
+    },
+} });
+logMemory = logInstance.exports.memory;
+if (logInstance.exports.daemon_start() !== 0 || loggedText !== "daemon ready")
+    throw new Error("daemon Log did not run successfully during startup");
+console.log("  ok   cold console rejected; Log runs during daemon startup");
 
 const wasm = readFileSync(out);
 rmSync(tmp, { recursive: true, force: true });

@@ -182,12 +182,10 @@ const want = "0:A.rebuild,1:A.refresh,2:B.rebuild";
 if (got !== want) fail(`wrong derives catalog: got '${got}', want '${want}'`);
 
 const cold = expectCompile(fixture, ["--targetMode", "cold"]);
-if (cold.wat.includes('(export "derive_run"')) {
-  fail("cold artifact must not export derive_run");
-}
-if (findSection(cold.wasm, "toildb.derives") !== null) {
-  fail("cold artifact must not emit toildb.derives");
-}
+if (!cold.wat.includes('(export "derive_run"')) fail("cold artifact must export its materializers");
+const coldSection = findSection(cold.wasm, "toildb.derives");
+if (coldSection === null || decodeDerives(coldSection).map(d => `${d.id}:${d.db}.${d.method}`).join(",") !== want)
+  fail("cold artifact materializers must match the database declaration order");
 
 expectCompileFailure(
   `

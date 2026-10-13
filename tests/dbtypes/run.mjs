@@ -29,12 +29,35 @@ try {
     let memory;
     let status = 0;
     let calls = 0;
+    let stored = null;
+    let last = null;
+    const copy = (ptr, length) => new Uint8Array(memory.buffer, ptr, length).slice();
+    const read = () => { last = stored; return last === null ? -2 : last.length; };
     const { instance } = await WebAssembly.instantiate(readFileSync(out), {
         env: {
             abort() { throw new Error("unexpected guest abort"); },
             "data.resolve_collection"(_ptr, _len, outPtr) {
                 new DataView(memory.buffer).setUint32(outPtr, 1, true);
                 return 0;
+            },
+            "data.create"(_h, _kp, _kl, vp, vl) { stored = copy(vp, vl); return 0; },
+            "data.get": read,
+            "data.get_current": read,
+            "data.take_result"(ptr, capacity) {
+                assert.ok(last !== null && capacity >= last.length);
+                new Uint8Array(memory.buffer, ptr, capacity).set(last);
+                return last.length;
+            },
+            "data.result_schema_version"() { return 0n; },
+            "data.compare_exchange"(_h, _kp, _kl, ep, el, vp, vl) {
+                assert.deepEqual(copy(ep, el), stored, "snapshot retains pre-mutation bytes");
+                stored = copy(vp, vl);
+                return 1;
+            },
+            "data.compare_delete"(_h, _kp, _kl, ep, el) {
+                if (stored === null || !Buffer.from(copy(ep, el)).equals(Buffer.from(stored))) return 0;
+                stored = null;
+                return 1;
             },
             "data.enqueue"(handle, _keyPtr, keyLen, _valuePtr, valueLen) {
                 assert.equal(handle, 1);
@@ -50,6 +73,12 @@ try {
         assert.equal(instance.exports.queue(), 0, "absent/rejected enqueue returns false");
     }
     assert.equal(calls, 3);
+    assert.equal(instance.exports.seed(), 1);
+    assert.equal(instance.exports.replaceObserved(), 1);
+    assert.equal(instance.exports.deleteStale(), 0, "stale typed deletion preserves the replacement");
+    assert.equal(instance.exports.deleteObserved(), 1);
+    assert.equal(instance.exports.deleteObserved(), 0);
+
     console.log("ToilDB declaration parity test suite: ALL PASS");
 } finally {
     rmSync(tmp, { recursive: true, force: true });

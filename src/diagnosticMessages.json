@@ -231,5 +231,6 @@
   "Stream connect handler '{0}' has an invalid signature.": 9014,
   "Stream message handler '{0}' has an invalid signature.": 9015,
   "Stream close handler '{0}' has an invalid signature.": 9016,
-  "Stream disconnect handler '{0}' has an invalid signature.": 9017
+  "Stream disconnect handler '{0}' has an invalid signature.": 9017,
+  "Host import '{0}' is not available in a cold daemon artifact; use the server Log API.": 9018
 }

@@ -71,6 +71,24 @@ export namespace toildbHost {
     idemPtr: usize
   ): i32;
 
+  // Caller-observed byte CAS: expectedLen=-1 expects absence. 1 applied, 0 mismatch.
+  // @ts-ignore: decorator
+  @external("env", "data.compare_exchange")
+  export declare function compareExchange(
+    handle: u32, keyPtr: usize, keyLen: i32,
+    expectedPtr: usize, expectedLen: i32, valPtr: usize, valLen: i32
+  ): i32;
+
+  // @ts-ignore: decorator
+  @external("env", "data.compare_delete")
+  export declare function compareDelete(
+    handle: u32, keyPtr: usize, keyLen: i32, expectedPtr: usize, expectedLen: i32
+  ): i32;
+
+  // @ts-ignore: decorator
+  @external("env", "data.get_current")
+  export declare function getCurrent(handle: u32, keyPtr: usize, keyLen: i32): i32;
+
   // record.upsert -> 0 created | 1 updated | 2 @unique-conflict (not written) |
   // negative error. A single blind last-writer-wins put: creates the row if
   // absent, overwrites it if present, in ONE op (no create-then-patch round trip).
@@ -141,6 +159,11 @@ export namespace toildbHost {
     idemPtr: usize
   ): i32;
 
+  // Remove a view key (Action/Derive/Job), idempotently.
+  // @ts-ignore: decorator
+  @external("env", "data.view_delete")
+  export declare function viewDelete(handle: u32, keyPtr: usize, keyLen: i32, idemPtr: usize): i32;
+
   // membership.contains -> 1 present | 0 absent | negative error.
   // @ts-ignore: decorator
   @external("env", "data.membership_contains")
@@ -167,6 +190,13 @@ export namespace toildbHost {
   // @ts-ignore: decorator
   @external("env", "data.membership_list")
   export declare function membershipList(handle: u32, setPtr: usize, setLen: i32, limit: i32): i32;
+
+  // Ordered membership page: list frame + optional length-prefixed raw cursor.
+  // @ts-ignore: decorator
+  @external("env", "data.membership_page")
+  export declare function membershipPage(
+    handle: u32, setPtr: usize, setLen: i32, cursorPtr: usize, cursorLen: i32, limit: i32
+  ): i32;
 
   // capacity.set_total(total: i64) -> 0 ok | negative error (job/derive only).
   // @ts-ignore: decorator
@@ -232,6 +262,16 @@ export namespace toildbHost {
 
   // Point reads: stashed value length | -2 absent | typed negative error.
   // result_schema_version exposes the stored event's schema version.
+  // @ts-ignore: decorator
+  @external("env", "data.events_reference")
+  export declare function eventsReference(handle: u32, keyPtr: usize, keyLen: i32, idPtr: usize, idLen: i32): i32;
+  // @ts-ignore: decorator
+  @external("env", "data.events_redact")
+  export declare function eventsRedact(handle: u32, keyPtr: usize, keyLen: i32, sequence: u64, hlc: u64): i32;
+  // @ts-ignore: decorator
+  @external("env", "data.events_entries")
+  export declare function eventsEntries(handle: u32, keyPtr: usize, keyLen: i32, limit: i32, after: u64): i32;
+
   // @ts-ignore: decorator
   @external("env", "data.events_get")
   export declare function eventsGet(handle: u32, keyPtr: usize, keyLen: i32, evidPtr: usize, evidLen: i32): i32;

@@ -223,19 +223,20 @@ class Dependee {
 function dbOpOf(family: string, method: string): string {
   switch (family) {
     case "Documents": {
-      if (method == "get" || method == "require") return "Get";
+      if (method == "get" || method == "getSnapshot" || method == "getCurrentSnapshot" || method == "require") return "Get";
       if (method == "getMany") return "GetMany";
       if (method == "exists") return "Exists";
       if (method == "create") return "Create";
-      if (method == "patch") return "Patch";
+      if (method == "patch" || method == "compareExchange" || method == "compareExchangeSnapshot") return "Patch";
       if (method == "upsert") return "Upsert";
-      if (method == "delete") return "Delete";
+      if (method == "delete" || method == "compareDelete" || method == "compareDeleteSnapshot") return "Delete";
       if (method == "getDelete") return "GetDelete";
       return "";
     }
     case "View": {
       if (method == "get" || method == "require") return "ViewGet";
       if (method == "getMany") return "GetMany";
+      if (method == "delete") return "ViewDelete";
       if (method == "publish") return "ViewPublish";
       return "";
     }
@@ -251,16 +252,18 @@ function dbOpOf(family: string, method: string): string {
       return "";
     }
     case "Events": {
-      if (method == "get") return "EventsGet";
+      if (method == "get" || method == "reference") return "EventsGet";
       if (method == "last") return "EventsLast";
       if (method == "append") return "Append";
       if (method == "latest") return "Latest";
       if (method == "since") return "EventsSince";
+      if (method == "entries") return "EventsSince";
+      if (method == "redact") return "EventsRedact";
       return "";
     }
     case "Membership": {
       if (method == "contains") return "MembershipContains";
-      if (method == "list") return "MembershipList";
+      if (method == "list" || method == "listPage") return "MembershipList";
       if (method == "add") return "MembershipAdd";
       if (method == "remove") return "MembershipRemove";
       return "";
@@ -293,11 +296,11 @@ function dbKindAllows(kind: i32, op: string): bool {
     case DecoratorKind.Query: return isDbReadOp(op) && !isDbScanOp(op);
     case DecoratorKind.Action:
       return (isDbReadOp(op) && !isDbScanOp(op)) || op == "Create" || op == "Patch" || op == "Upsert" || op == "Delete" ||
-        op == "GetDelete" || op == "Append" || op == "CounterAdd" || op == "UniqueClaim" ||
+        op == "EventsRedact" || op == "GetDelete" || op == "ViewDelete" || op == "Append" || op == "CounterAdd" || op == "UniqueClaim" ||
         op == "UniqueRelease" || op == "MembershipAdd" || op == "MembershipRemove" ||
         op == "CapacityReserve" || op == "CapacityConfirm" || op == "CapacityCancel";
     case DecoratorKind.Derive:
-      return isDbReadOp(op) || op == "ViewPublish" || op == "Append" || op == "CounterAdd";
+      return isDbReadOp(op) || op == "ViewPublish" || op == "ViewDelete" || op == "Append" || op == "CounterAdd";
     case DecoratorKind.Job: return true;
     case DecoratorKind.Admin: return false;
     // A @migrate is a PURE value transform run during decode (the read path); it
@@ -734,17 +737,14 @@ export class Parser extends DiagnosticEmitter {
     this.rpcImportedSources.clear();
   }
 
-  /** Synthesize the hot/default module-level `derive_run(derive_id)` export for
+  /** Synthesize the module-level `derive_run(derive_id)` export for
    *  `@database` classes with `@derive` methods. Runs before element creation
    *  from `initializeProgram`, so generated members/exports are compiled as
-   *  ordinary program symbols. Cold artifacts intentionally do not export
-   *  request-path derive runners and do not emit `toildb.derives`. */
+   *  ordinary program symbols. Cold artifacts carry the same materializers so
+   *  daemon writes can refresh their views without waiting for a request. */
   weaveDeriveHandlers(): void {
     if (this.toildbDerivesWoven) return;
     this.toildbDerivesWoven = true;
-    let options = this.options;
-    if (options != null && options.targetMode == "cold") return;
-
     let firstDecl: ClassDeclaration | null = null;
     let singletonDecls = "";
     let dispatch = "";
