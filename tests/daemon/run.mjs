@@ -12,11 +12,13 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
 const spec = join(here, "daemon.spec.ts");
 const tmp = mkdtempSync(join(tmpdir(), "daemontest-"));
+process.on("exit", () => rmSync(tmp, { recursive: true, force: true }));
 const out = join(tmp, "spec.wasm");
 
 const compile = spawnSync(
@@ -60,6 +62,34 @@ logMemory = logInstance.exports.memory;
 if (logInstance.exports.daemon_start() !== 0 || loggedText !== "daemon ready")
     throw new Error("daemon Log did not run successfully during startup");
 console.log("  ok   cold console rejected; Log runs during daemon startup");
+
+// Job permissions must be carried to the host; decorator order and cron do not alter task IDs.
+const kindApp = join(tmp, "kinds.ts");
+const kindOut = join(tmp, "kinds.wasm");
+writeFileSync(kindApp, `@daemon class Jobs {
+  onStart(): void {}
+  @scheduled("1s") plain(): void {}
+  @scheduled("2s") @job repair(): void {}
+  @job @scheduled("0 * * * *") hourlyRepair(): void {}
+}`);
+const kinds = spawnSync("node", [join(root, "bin", "toilscript.js"), kindApp, "-o", kindOut, "--runtime", "stub", "--targetMode", "cold"], { encoding: "utf8" });
+if (kinds.status !== 0) throw new Error(kinds.stdout + kinds.stderr);
+const kindModule = new WebAssembly.Module(readFileSync(kindOut));
+const kindCatalog = Buffer.from(WebAssembly.Module.customSections(kindModule, "toildaemon.catalog")[0]);
+assert.equal(kindCatalog.readUInt16LE(0), 2);
+assert.equal(kindCatalog.readUInt16LE(3), 3);
+let kindOffset = 5;
+for (const [index, [name, kind]] of [["plain", 1], ["repair", 2], ["hourlyRepair", 2]].entries()) {
+    const length = kindCatalog.readUInt32LE(kindOffset); kindOffset += 4;
+    assert.equal(kindCatalog.toString("utf8", kindOffset, kindOffset + length), name); kindOffset += length;
+    assert.equal(kindCatalog.readUInt16LE(kindOffset), index);
+    kindOffset += 40;
+    assert.equal(kindCatalog[kindOffset++], kind);
+}
+assert.equal(kindOffset, kindCatalog.length);
+const legacyCatalog = Buffer.from(WebAssembly.Module.customSections(logModule, "toildaemon.catalog")[0]);
+assert.equal(legacyCatalog.readUInt16LE(0), 1, "Action-only daemons retain the legacy format");
+console.log("  ok   scheduled Job kinds round-trip; legacy daemons retain Action catalogs");
 
 const wasm = readFileSync(out);
 rmSync(tmp, { recursive: true, force: true });

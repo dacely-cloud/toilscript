@@ -1473,12 +1473,13 @@ function parseSchedule(rawSpec: string): Schedule {
 class ScheduledTask {
   name: string = "";
   schedule: Schedule = new Schedule();
+  functionKind: i32 = 1; // Action; Job = 2
 }
 
 /** Build the `toildaemon.catalog` section bytes, or `null` if the program
  *  declares no `@daemon` class. Per Part 5 (LE):
  *
- *    u16 format_version = 1
+ *    u16 format_version = 1 or 2 (2 when a scheduled task is @job)
  *    u8  has_daemon
  *    u16 n_scheduled
  *    per task:
@@ -1494,6 +1495,7 @@ class ScheduledTask {
  *      u8  overlap_policy         (0 default)
  *      u8  catchup_policy         (0 default)
  *      u64 gas_hint
+ *      u8  function_kind          (v2 only: 1 Action, 2 Job; v1 is Action)
  *
  *  Parses each `@scheduled(spec)` argument; fires diagnostics 9010/9011 for a
  *  missing/non-string arg or an unparseable spec.
@@ -1515,6 +1517,7 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
   if (daemon == null) return null;
 
   let tasks = new Array<ScheduledTask>();
+  let hasJob = false;
   let members = daemon.members;
   for (let m = 0, mk = members.length; m < mk; ++m) {
     let member = members[m];
@@ -1543,11 +1546,15 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
     let task = new ScheduledTask();
     task.name = method.name.text;
     task.schedule = schedule;
+    if (hasDeco(method.decorators, DecoratorKind.Job)) {
+      task.functionKind = 2;
+      hasJob = true;
+    }
     tasks.push(task);
   }
 
   let w = new CatWriter();
-  w.u16(1);              // format_version
+  w.u16(hasJob ? 2 : 1);  // older hosts reject Job catalogs rather than downgrade them
   w.u8(1);               // has_daemon (always 1 when the section is present)
   w.u16(tasks.length);   // n_scheduled
   for (let t = 0, tn = tasks.length; t < tn; ++t) {
@@ -1573,6 +1580,7 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
     w.u8(0);                           // overlap_policy (0 = skip-if-running)
     w.u8(0);                           // catchup_policy (0 = no-backfill)
     w.u64(0.0);                        // gas_hint (0 = use plan default)
+    if (hasJob) w.u8(task.functionKind);
   }
   return w.toBytes();
 }
