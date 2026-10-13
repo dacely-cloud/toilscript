@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.1.64] - 2026-10-13
+
+- No changes
+
+
 ## [v0.1.63] - 2026-10-04
 
 - Add request-safe Events `get` and `last` point reads with stored-schema decoding.
