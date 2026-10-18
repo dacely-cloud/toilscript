@@ -26,6 +26,54 @@ declare function main(): void;
  */
 declare function data(target: Function): void;
 
+/** Binary writer used by compiler-generated @data.encodeInto. */
+declare class DataWriter {
+  constructor(capacity?: i32);
+  writeU8(value: u8): DataWriter;
+  writeU16(value: u16): DataWriter;
+  writeU32(value: u32): DataWriter;
+  writeU64(value: u64): DataWriter;
+  writeI8(value: i8): DataWriter;
+  writeI16(value: i16): DataWriter;
+  writeI32(value: i32): DataWriter;
+  writeI64(value: i64): DataWriter;
+  writeF32(value: f32): DataWriter;
+  writeF64(value: f64): DataWriter;
+  writeBool(value: bool): DataWriter;
+  writeBytes(value: Uint8Array): DataWriter;
+  writeString(value: string): DataWriter;
+  writeU128(value: u128): DataWriter;
+  writeI128(value: i128): DataWriter;
+  writeU256(value: u256): DataWriter;
+  writeI256(value: i256): DataWriter;
+  length(): i32;
+  toBytes(): Uint8Array;
+}
+
+/** Binary reader used by compiler-generated @data.decodeFrom. */
+declare class DataReader {
+  constructor(bytes: Uint8Array);
+  ok: bool;
+  readU8(): u8;
+  readU16(): u16;
+  readU32(): u32;
+  readU64(): u64;
+  readI8(): i8;
+  readI16(): i16;
+  readI32(): i32;
+  readI64(): i64;
+  readF32(): f32;
+  readF64(): f64;
+  readBool(): bool;
+  readBytes(): Uint8Array;
+  readString(): string;
+  readU128(): u128;
+  readI128(): i128;
+  readU256(): u256;
+  readI256(): i256;
+  remaining(): i32;
+}
+
 /**
  * Marks a FIELD of a `@data` (or `@user`) class as globally unique: the compiler
  * emits a per-field uniqueness constraint into the collection catalog so the edge
@@ -190,6 +238,8 @@ declare class StreamPacket {
 declare function database(target: Function): void;
 
 declare interface CollectionOptions {
+  replication?: "edgeCache" | "allPopsHot" | "allPopsFull" | "regionalHot" | "homeFull_edgeTail" | "localOnly";
+  placement?: "hashKey" | "local";
   fillMaxWaitMs?: i32;
   maxWaitMs?: i32;
   fillStale?: string;
@@ -246,7 +296,17 @@ declare class DocumentSnapshot<V> {
   constructor(value: V, encoded: Uint8Array);
 }
 
+declare class DocumentEntry<K,V> {
+  key:K; snapshot:DocumentSnapshot<V>; encodedKey:Uint8Array;
+  readonly value:V;
+}
+declare class DocumentPage<K,V> {
+  entries:DocumentEntry<K,V>[]; cursor:Uint8Array|null;
+}
 declare class Documents<K, V> {
+    partition<P>(key: P): AtomicDocuments<K, V>;
+  /** Background only. Empty pages can carry a continuation cursor. */
+  scan(limit:i32,cursor?:Uint8Array|null):DocumentPage<K,V>;
   get(key: K): V | null;
   require(key: K): V;
   exists(key: K): bool;
@@ -300,6 +360,18 @@ declare class Unique<K, V> {
 }
 
 /** A page in encoded-member byte order, with an opaque continuation cursor. */
+/** Ordered entries backed by membership storage. Index stable @data IDs. */
+declare class SortedIndex<K, V> {
+  add(key: K, order: string, value: V): void;
+  remove(key: K, order: string, value: V): void;
+  page(key: K, limit: i32, cursor?: Uint8Array | null): SortedIndexPage<V>;
+}
+declare class SortedIndexPage<V> { readonly items: V[]; readonly cursor: Uint8Array | null; }
+declare class SortKey {
+  static u64(value: u64): string;
+  static descendingU64(value: u64): string;
+}
+
 declare class MembershipPage<M> {
   members: M[];
   cursor: Uint8Array | null;
@@ -515,7 +587,19 @@ declare const enum DbError {
 }
 
 /** ToilDB diagnostics: tell an absent row from a failed read. */
+declare class DbBudget {
+  readonly ops: u32; readonly writes: u32; readonly bytes: u32;
+  readonly maxOps: u32; readonly maxWrites: u32; readonly maxBytes: u32; readonly maxResultBytes: u32;
+  readonly remainingOps: u32; readonly remainingWrites: u32; readonly remainingBytes: u32;
+}
+declare class DbChange { readonly database: string; readonly collection: string; readonly key: Uint8Array; }
+declare class DbChanges { readonly fullRescan: bool; readonly keys: DbChange[]; }
 declare class Db {
+    static atomic<P>(partition: P, token: Uint8Array): AtomicBatch;
+  static continueDerive(): void;
+  static runDerive(database: string, method: string, body: () => void): void;
+  static changes(): DbChanges;
+  static budget(): DbBudget;
   /** The failure recorded by the most recent read that returned `null`. */
   static lastError(): DbError;
   /** Decode a raw negative host status into its typed failure. */
@@ -788,6 +872,8 @@ declare class u256 {
   static fromF32(value: f32): u256;
   static from<T>(value: T): u256;
   static fromString(str: string, radix?: i32): u256;
+  /** Null on invalid digits, unsupported radix, empty input or overflow. */
+  static tryParse(str: string, radix?: i32): u256 | null;
 
   static isEmpty(value: u256): bool;
   static add(a: u256, b: u256): u256;
@@ -912,4 +998,35 @@ declare class Log {
   static info(message: string): bool;
   static warn(message: string): bool;
   static error(message: string): bool;
+}
+
+/** Non-trapping primitive-integer arithmetic; value is zero when ok is false. */
+declare class CheckedResult<T> { readonly ok: bool; readonly value: T; }
+declare class Checked {
+  static add<T>(a: T, b: T): CheckedResult<T>;
+  static subtract<T>(a: T, b: T): CheckedResult<T>;
+  static multiply<T>(a: T, b: T): CheckedResult<T>;
+}
+
+/** Unicode 17.0.0 General_Category and White_Space properties. */
+declare class Unicode {
+  static version(): string;
+  static category(codePoint: i32): string;
+  static isLetter(codePoint: i32): bool;
+  static isMark(codePoint: i32): bool;
+  static isNumber(codePoint: i32): bool;
+  static isWhitespace(codePoint: i32): bool;
+}
+
+declare class AtomicDocuments<K,V> {
+    get(key:K):V|null;
+    getSnapshot(key:K):DocumentSnapshot<V>|null;
+    require(key:K):V;
+}
+declare class AtomicBatch {
+    constructor(encodedPartition:Uint8Array,token:Uint8Array);
+    create<K,V>(collection:Documents<K,V>,key:K,value:V):AtomicBatch;
+    compareExchange<K,V>(collection:Documents<K,V>,key:K,expected:DocumentSnapshot<V>|null,value:V):AtomicBatch;
+    compareDelete<K,V>(collection:Documents<K,V>,key:K,expected:DocumentSnapshot<V>):AtomicBatch;
+    commit():bool;
 }

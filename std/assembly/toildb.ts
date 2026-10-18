@@ -176,6 +176,17 @@ function __toildbMiss(status: i32): void {
   __toildbLastError = __toildbErrorOf(status);
 }
 
+/// A point-in-time snapshot; reading it consumes host gas, not a DB operation.
+@global
+export class DbBudget {
+  constructor(public ops: u32, public writes: u32, public bytes: u32,
+    public maxOps: u32, public maxWrites: u32, public maxBytes: u32,
+    public maxResultBytes: u32) {}
+  get remainingOps(): u32 { return this.ops >= this.maxOps ? 0 : this.maxOps - this.ops; }
+  get remainingWrites(): u32 { return this.writes >= this.maxWrites ? 0 : this.maxWrites - this.writes; }
+  get remainingBytes(): u32 { return this.bytes >= this.maxBytes ? 0 : this.maxBytes - this.bytes; }
+}
+
 /// ToilDB diagnostics. Read `lastError()` immediately after a read returns `null`
 /// to tell an absent row from a failed one; the next read overwrites it.
 ///
@@ -192,8 +203,64 @@ function __toildbMiss(status: i32): void {
 /// reads also answer `null`, but on their own `-2 absent` / `-3 forbidden` statuses
 /// rather than a `TDLnnn`, so they leave `lastError()` untouched: do not consult it
 /// after one, or you will read a stale value from an earlier ToilDB read.
+/// A conservative invalidation hint; a key can also have been read or retried.
+@global
+export class DbChange {
+  constructor(public database: string, public collection: string, public key: Uint8Array) {}
+}
+
+@global
+export class DbChanges {
+  constructor(public fullRescan: bool, public keys: DbChange[]) {}
+}
+
 @global
 export class Db {
+  /// Begin an Action-only batch inside one explicit partition. All collections
+  /// must be localOnly Documents in the same database. Use a stable token.
+  static atomic<P>(partition: P, token: Uint8Array): AtomicBatch {
+    return new AtomicBatch(partition.encode(), token);
+  }
+  /// Persist a request for another invocation by the resident cold scheduler.
+  static continueDerive(): void {
+    if (toildbHost.continueDerive() != 0) unreachable();
+  }
+
+  /// Explicit timed/startup materialization from a Job. Retains the Job budget.
+  /// Use the @derive database/method names so events.since shares its checkpoint.
+  static runDerive(database: string, method: string, body: () => void): void {
+    const db = Uint8Array.wrap(String.UTF8.encode(database));
+    const name = Uint8Array.wrap(String.UTF8.encode(method));
+    if (toildbHost.beginDerive(db.dataStart, db.length, name.dataStart, name.length) != 0) unreachable();
+    body();
+    if (toildbHost.endDerive() != 0) unreachable();
+  }
+
+  /// Derive-only. Always handle fullRescan (startup, retries, overflow or remote writes).
+  static changes(): DbChanges {
+    const out = new Uint8Array(65536);
+    const n = toildbHost.changes(out.dataStart, out.byteLength);
+    if (n < 5 || n > out.byteLength) unreachable();
+    const reader = new DataReader(out.subarray(0, n));
+    const full = reader.readU8() != 0;
+    const count = reader.readU32();
+    if (count > 256) unreachable();
+    const keys = new Array<DbChange>();
+    for (let i:u32 = 0; i < count; i++) {
+      keys.push(new DbChange(reader.readString(), reader.readString(), reader.readBytes()));
+    }
+    return new DbChanges(full, keys);
+  }
+
+  /// Includes framework calls and internal unique-field enforcement.
+  static budget(): DbBudget {
+    const out = new Uint8Array(28);
+    if (toildbHost.budget(out.dataStart, out.byteLength) != 28) unreachable();
+    return new DbBudget(load<u32>(out.dataStart), load<u32>(out.dataStart, 4),
+      load<u32>(out.dataStart, 8), load<u32>(out.dataStart, 12), load<u32>(out.dataStart, 16),
+      load<u32>(out.dataStart, 20), load<u32>(out.dataStart, 24));
+  }
+
   /// The failure recorded by the most recent read that returned `null`. `None`
   /// when that read simply found nothing.
   static lastError(): DbError {
@@ -240,12 +307,52 @@ export class DocumentSnapshot<V> {
   constructor(public value: V, public encoded: Uint8Array) {}
 }
 
+/// An exact observed document, suitable for conditional cleanup after a scan.
+@global
+export class DocumentEntry<K,V> {
+  constructor(public key:K, public snapshot:DocumentSnapshot<V>, public encodedKey:Uint8Array) {}
+  get value():V { return this.snapshot.value; }
+}
+@global
+export class DocumentPage<K,V> {
+  constructor(public entries:DocumentEntry<K,V>[], public cursor:Uint8Array|null) {}
+}
+
 @global
 export class Documents<K, V> {
   private __handle: u32;
 
   constructor(handle: u32) {
     this.__handle = handle;
+  }
+
+  /** A separate, explicitly partitioned namespace for atomic records. */
+  partition<P>(key: P): AtomicDocuments<K, V> {
+    return new AtomicDocuments<K, V>(this.__handle, key.encode());
+  }
+
+  /** @internal Opaque handle; the host still validates every capability. */
+  __atomicHandle(): u32 { return this.__handle; }
+
+  /// Bounded background scan of a complete local collection copy. Empty pages
+  /// can have a cursor. Reuse it until null; concurrent writes are not a snapshot.
+  scan(limit:i32,cursor:Uint8Array|null=null):DocumentPage<K,V> {
+    const cb=cursor==null?new Uint8Array(0):cursor;
+    const status=toildbHost.documentsScan(this.__handle,cb.dataStart,cursor==null?-1:cb.byteLength,limit);
+    if(status<0) abort("ToilDB documents.scan failed: status "+status.toString(),"toildb",0,0);
+    const bytes=__toildbTake(status);
+    const reader=new DataReader(bytes);
+    const count=reader.readU32();
+    const entries=new Array<DocumentEntry<K,V>>();
+    for(let i:u32=0;i<count;i++) {
+      const kb=reader.readBytes();const version=reader.readU32();const vb=reader.readBytes();
+      const key=instantiate<K>();key.decodeInto(kb);
+      const value=instantiate<V>();value.decodeIntoVersioned(vb,<i64>version);
+      entries.push(new DocumentEntry<K,V>(key,new DocumentSnapshot<V>(value,vb),kb));
+    }
+    let next:Uint8Array|null=null;
+    if(reader.readU8()!=0) next=reader.readBytes();
+    return new DocumentPage<K,V>(entries,next);
   }
 
   /// Return the record, or `null` if it does not exist.
@@ -601,18 +708,20 @@ export class Membership<K, M> {
   add(key: K, member: M): void {
     const kb = key.encode();
     const mb = member.encode();
-    toildbHost.membershipAdd(
+    const status = toildbHost.membershipAdd(
       this.__handle, kb.dataStart, kb.byteLength, mb.dataStart, mb.byteLength, 0
     );
+    if (status < 0) abort("ToilDB membership.add failed: status " + status.toString(), "toildb", 0, 0);
   }
 
   /// Remove `member` from the set (idempotent).
   remove(key: K, member: M): void {
     const kb = key.encode();
     const mb = member.encode();
-    toildbHost.membershipRemove(
+    const status = toildbHost.membershipRemove(
       this.__handle, kb.dataStart, kb.byteLength, mb.dataStart, mb.byteLength, 0
     );
+    if (status < 0) abort("ToilDB membership.remove failed: status " + status.toString(), "toildb", 0, 0);
   }
 
   /// Read members strictly after an opaque cursor. A full page may require an
@@ -666,6 +775,78 @@ export class Membership<K, M> {
       off += len;
     }
     return out;
+  }
+}
+
+/// A query-readable ordered index. Order keys compare by UTF-8 bytes; equal
+/// order keys compare by encoded value bytes. Index stable IDs and fetch their
+/// documents separately when values may change. Remove the old entry to reindex.
+@global
+export class SortedIndex<K, V> {
+  private members: Membership<K, SortedIndexMember<V>>;
+  constructor(handle: u32) { this.members = new Membership<K, SortedIndexMember<V>>(handle); }
+  add(key: K, order: string, value: V): void {
+    this.members.add(key, new SortedIndexMember<V>(order, value));
+  }
+  remove(key: K, order: string, value: V): void {
+    this.members.remove(key, new SortedIndexMember<V>(order, value));
+  }
+  /// One bounded read: Query <=32, Action <=64, background <=1024 items.
+  /// Cursors are exclusive. Concurrent writes may change later pages.
+  page(key: K, limit: i32, cursor: Uint8Array | null = null): SortedIndexPage<V> {
+    const page = this.members.listPage(key, limit, cursor);
+    const values = new Array<V>();
+    for (let i = 0; i < page.members.length; i++) values.push(page.members[i].value);
+    return new SortedIndexPage<V>(values, page.cursor);
+  }
+}
+
+@global
+export class SortedIndexPage<V> {
+  constructor(public items: V[], public cursor: Uint8Array | null) {}
+}
+
+/// Sortable unsigned numeric keys; fixed width preserves numeric order.
+@global
+export class SortKey {
+  static u64(value: u64): string { return value.toString(16).padStart(16, '0'); }
+  static descendingU64(value: u64): string { return SortKey.u64(u64.MAX_VALUE - value); }
+}
+
+// Order bytes precede the payload. Escaped NUL and a double-NUL terminator
+// preserve lexical ordering, including prefix strings and embedded NULs.
+class SortedIndexMember<V> {
+  order: string;
+  value: V;
+  constructor(order: string = '', value: V = instantiate<V>()) { this.order = order; this.value = value; }
+  encode(): Uint8Array {
+    const order = Uint8Array.wrap(String.UTF8.encode(this.order));
+    const value = this.value.encode();
+    let size = order.length + 2 + value.length;
+    for (let i = 0; i < order.length; i++) if (order[i] == 0) size++;
+    const out = new Uint8Array(size);
+    let offset = 0;
+    for (let i = 0; i < order.length; i++) {
+      out[offset++] = order[i];
+      if (order[i] == 0) out[offset++] = 255;
+    }
+    offset += 2;
+    out.set(value, offset);
+    return out;
+  }
+  decodeIntoVersioned(bytes: Uint8Array, version: i64): void {
+    let offset = 0;
+    let found = false;
+    while (offset < bytes.length) {
+      if (bytes[offset++] != 0) continue;
+      if (offset >= bytes.length) unreachable();
+      const next = bytes[offset++];
+      if (next == 0) { found = true; break; }
+      if (next != 255) unreachable();
+    }
+    if (!found) unreachable();
+    this.value = instantiate<V>();
+    this.value.decodeIntoVersioned(bytes.subarray(offset), version);
   }
 }
 
@@ -1228,5 +1409,59 @@ export class Events<K, V> {
       off += len;
     }
     return out;
+  }
+}
+
+@global
+export class AtomicDocuments<K, V> {
+  constructor(private handle: u32, private partitionKey: Uint8Array) {}
+  getSnapshot(key: K): DocumentSnapshot<V> | null {
+    const kb=key.encode();
+    const n=toildbHost.atomicGet(this.handle,this.partitionKey.dataStart,this.partitionKey.length,kb.dataStart,kb.length);
+    if(n<0){__toildbMiss(n);return null;}
+    const bytes=__toildbTake(n);const value=instantiate<V>();value.decodeInto(bytes);
+    return new DocumentSnapshot<V>(value,bytes);
+  }
+  get(key: K): V | null {const snapshot=this.getSnapshot(key);return snapshot==null?null:snapshot.value;}
+  require(key: K): V {const value=this.get(key);if(value==null)abort('Atomic document missing','toildb',0,0);return value;}
+}
+class AtomicBatchEntry {
+  constructor(public handle:u32,public key:Uint8Array,public expected:Uint8Array|null,public value:Uint8Array|null) {}
+}
+@global
+export class AtomicBatch {
+  private entries:AtomicBatchEntry[]=new Array<AtomicBatchEntry>();
+  private partitionKey:Uint8Array;
+  private token:Uint8Array;
+  constructor(partitionKey:Uint8Array,token:Uint8Array) {
+    if(partitionKey.length<1||partitionKey.length>512||token.length<16||token.length>64)
+      abort('Atomic partition or token length','toildb',0,0);
+    this.partitionKey=partitionKey.slice();this.token=token.slice();
+  }
+  private add(entry:AtomicBatchEntry):AtomicBatch {
+    if(this.entries.length>=16)abort('Atomic batch has more than 16 records','toildb',0,0);
+    this.entries.push(entry);return this;
+  }
+  create<K,V>(collection:Documents<K,V>,key:K,value:V):AtomicBatch {
+    return this.add(new AtomicBatchEntry(collection.__atomicHandle(),key.encode(),null,value.encode()));
+  }
+  compareExchange<K,V>(collection:Documents<K,V>,key:K,expected:DocumentSnapshot<V>|null,value:V):AtomicBatch {
+    return this.add(new AtomicBatchEntry(collection.__atomicHandle(),key.encode(),expected==null?null:expected.encoded.slice(),value.encode()));
+  }
+  compareDelete<K,V>(collection:Documents<K,V>,key:K,expected:DocumentSnapshot<V>):AtomicBatch {
+    return this.add(new AtomicBatchEntry(collection.__atomicHandle(),key.encode(),expected.encoded.slice(),null));
+  }
+  commit():bool {
+    if(this.entries.length==0)abort('Atomic batch is empty','toildb',0,0);
+    const w=new DataWriter();w.writeU8(1);w.writeBytes(this.partitionKey);w.writeBytes(this.token);w.writeU32(this.entries.length);
+    for(let i=0;i<this.entries.length;i++) {
+      const entry=this.entries[i];w.writeU32(entry.handle);w.writeBytes(entry.key);
+      const expected=entry.expected;w.writeBool(expected!=null);if(expected!=null)w.writeBytes(expected);
+      const value=entry.value;w.writeBool(value!=null);if(value!=null)w.writeBytes(value);
+    }
+    const frame=w.toBytes();if(frame.length>132*1024)abort('Atomic batch input limit','toildb',0,0);
+    const status=toildbHost.atomicBatch(frame.dataStart,frame.length);
+    if(status<0)abort('Atomic batch failed: '+status.toString(),'toildb',0,0);
+    return status==1;
   }
 }

@@ -284,31 +284,34 @@ export class u256 {
    * @param {i32} [radix=10] - The base (10 for decimal, 16 for hexadecimal).
    * @returns {u256} - The resulting `u256`.
    */
-  @inline
   static fromString(str: string, radix: i32 = 10): u256 {
-    assert(radix == 10 || radix == 16, "radix must be 10 or 16");
-    let len = str.length;
-    if (len == 0) return u256.Zero;
-    let result = u256.Zero; // Use cached Zero
-    if (radix == 10) {
-      for (let i = 0; i < len; i++) {
-        let c = str.charCodeAt(i);
-        assert(c >= 0x30 && c <= 0x39, "Invalid decimal digit");
-        let digit: u64 = c - 0x30;
-        result = result * u256.from(10) + u256.from(digit);
+    if (str.length == 0 && (radix == 10 || radix == 16)) return u256.Zero;
+    const value = u256.tryParse(str, radix);
+    if (changetype<usize>(value) == 0) throw new Error("Invalid or overflowing u256");
+    return changetype<u256>(value);
+  }
+
+  /** Strict, non-trapping decimal/hex parser. Null means malformed input or overflow.
+   * No whitespace, signs or prefixes are accepted; radix must be 10 or 16. */
+  static tryParse(str: string, radix: i32 = 10): u256 | null {
+    if ((radix != 10 && radix != 16) || str.length == 0) return null;
+    const limbs = new StaticArray<u32>(8);
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      let digit: u64;
+      if (c >= 48 && c <= 57) digit = c - 48;
+      else if (radix == 16 && c >= 65 && c <= 70) digit = c - 55;
+      else if (radix == 16 && c >= 97 && c <= 102) digit = c - 87;
+      else return null;
+      let carry = digit;
+      for (let j = 0; j < 8; j++) {
+        const product = <u64>limbs[j] * <u64>radix + carry;
+        limbs[j] = <u32>product;
+        carry = product >> 32;
       }
-    } else {
-      for (let i = 0; i < len; i++) {
-        let c = str.charCodeAt(i);
-        let digit: u64 = 0;
-        if (c >= 0x30 && c <= 0x39) digit = c - 0x30;
-        else if (c >= 0x41 && c <= 0x46) digit = c - 0x41 + 10;
-        else if (c >= 0x61 && c <= 0x66) digit = c - 0x61 + 10;
-        else assert(false, "Invalid hexadecimal digit");
-        result = result * u256.from(16) + u256.from(digit);
-      }
+      if (carry != 0) return null;
     }
-    return result;
+    return u256.fromBits(limbs[0], limbs[1], limbs[2], limbs[3], limbs[4], limbs[5], limbs[6], limbs[7]);
   }
 
   /**

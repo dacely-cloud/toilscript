@@ -1,5 +1,5 @@
 /// <reference path="./rt/index.d.ts" />
-
+import { normalizeString } from "./unicode";
 import { OBJECT, BLOCK_MAXSIZE, TOTAL_OVERHEAD } from "./rt/common";
 import { Runtime } from "shared/runtime";
 import { compareImpl, strtol, strtod, isSpace, isAscii, isFinalSigma, toLower8, toUpper8 } from "./util/string";
@@ -646,6 +646,10 @@ import { Array } from "./array";
 
   toString(): String {
     return this;
+  }
+
+  normalize(form: string = "NFC"): string {
+    return normalizeString(this, form);
   }
 }
 

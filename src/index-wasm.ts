@@ -365,6 +365,7 @@ export function getDependee(program: Program, file: string): string | null {
 export function initializeProgram(program: Program): void {
   // Weave @migrate version-dispatch into @data decoders BEFORE element creation,
   // so the modified `decodeInto` (not the original) becomes the compiled function.
+  program.parser.weaveDefaultAuthUserBinding();
   program.parser.weaveDataMigrations();
   // Weave @derive dispatchers before element creation for the same reason: the
   // single `derive_run` export and generated class dispatch methods must be

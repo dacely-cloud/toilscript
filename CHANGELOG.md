@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.1.66] - 2026-10-18
+
+- Emit plain `@data` / `@user` editor declarations with `--editorTypes`, including typed instance encoders and static decoders. Supports TypeScript 7.0.2 and WebStorm without JavaScript language-service plugins.
+- Complete TypeScript 6 plugin codec signatures and static DataWriter/DataReader typings.
+- Resolve explicit SDK type directives from installed packages as well as the dialect's built-in types under TypeScript 7.
+- Add sorted cursor indexes, atomic partition batches, derive change and continuation APIs, document scans, budget snapshots, Job startup metadata, and explicit collection replication/placement metadata.
+- Add strict u256 parsing, checked integer arithmetic, Unicode normalization and properties, generated encoded sizes, and a shared TypeScript/ToilScript subset. Reject unsupported RegExp at compile time.
+
+Validation includes TypeScript 6 and 7 editor checks with real-error controls, compiled codec round trips, database API suites, Unicode conformance, checked arithmetic comparisons, and the full compiler suite.
+
 ## [v0.1.65] - 2026-10-13
 
 - No changes

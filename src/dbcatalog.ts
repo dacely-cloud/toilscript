@@ -335,7 +335,7 @@ function familyByte(handleName: string): i32 {
     case "View": return 1;
     case "Events": return 2;
     case "Counter": return 3;
-    case "Membership": return 4;
+    case "Membership": case "SortedIndex": return 4;
     case "Unique": return 5;
     case "Capacity": return 6;
     default: return -1;
@@ -357,6 +357,8 @@ class CollEntry {
   valueType: string = "";
   fillMaxWaitMs: u32 = TOILDB_CATALOG_DEFAULT_FILL_WAIT_MS;
   fillAllowStale: bool = true;
+  replication: i32 = 0;
+  placement: i32 = 0;
 }
 
 class DbEntry {
@@ -535,6 +537,24 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
         }
         let opts = objectArg(collectionDeco);
         if (opts != null) {
+          let replication = labelField(opts, "replication");
+          if (replication.length > 0) {
+            let policies = ["edgeCache", "allPopsHot", "allPopsFull", "regionalHot", "homeFull_edgeTail", "localOnly"];
+            let policy = policies.indexOf(replication);
+            if (policy < 0) {
+              program.error(DiagnosticCode.User_defined_0, field.name.range, "Unknown @collection replication policy: " + replication);
+              return null;
+            }
+            entry.replication = policy;
+          }
+          let placement = labelField(opts, "placement");
+          if (placement.length > 0) {
+            if (placement != "hashKey" && placement != "local") {
+              program.error(DiagnosticCode.User_defined_0, field.name.range, "@collection placement must be hashKey or local");
+              return null;
+            }
+            entry.placement = placement == "local" ? 1 : 0;
+          }
           let fillMaxWaitMs = intField(opts, "fillMaxWaitMs");
           if (fillMaxWaitMs < 0.0) fillMaxWaitMs = intField(opts, "maxWaitMs");
           if (fillMaxWaitMs >= 0.0) {
@@ -600,8 +620,8 @@ export function buildToilDbCatalog(program: Program): Uint8Array | null {
       w.u32(id);            // value_data_id (the value type's message-boundary id)
       w.u32(schemaVersion); // schema_version (field-layout hash)
       w.u32(0);  // collection_generation
-      w.u8(0);   // replication = edgeCache
-      w.u8(0);   // placement = hashKey
+      w.u8(coll.replication);
+      w.u8(coll.placement);
       w.u32(coll.fillMaxWaitMs);
       w.u8(coll.fillAllowStale ? 1 : 0);
       w.u16(fields.length); // n_fields
@@ -1518,11 +1538,15 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
 
   let tasks = new Array<ScheduledTask>();
   let hasJob = false;
+  let startJob = false;
   let members = daemon.members;
   for (let m = 0, mk = members.length; m < mk; ++m) {
     let member = members[m];
     if (member.kind != NodeKind.MethodDeclaration) continue;
     let method = <MethodDeclaration>member;
+    if (method.name.text == "onStart" && !hasDeco(method.decorators, DecoratorKind.Scheduled)) {
+      startJob = hasDeco(method.decorators, DecoratorKind.Job);
+    }
     let deco = decoOf(method.decorators, DecoratorKind.Scheduled);
     if (deco == null) continue;
     let spec = stringArg(deco);
@@ -1554,8 +1578,9 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
   }
 
   let w = new CatWriter();
-  w.u16(hasJob ? 2 : 1);  // older hosts reject Job catalogs rather than downgrade them
+  w.u16(startJob ? 3 : hasJob ? 2 : 1);  // older hosts reject Job catalogs rather than downgrade them
   w.u8(1);               // has_daemon (always 1 when the section is present)
+  if (startJob) w.u8(2); // v3 startup function kind (1 Action / 2 Job)
   w.u16(tasks.length);   // n_scheduled
   for (let t = 0, tn = tasks.length; t < tn; ++t) {
     let task = tasks[t];
@@ -1580,7 +1605,7 @@ export function buildToilDaemonCatalog(program: Program): Uint8Array | null {
     w.u8(0);                           // overlap_policy (0 = skip-if-running)
     w.u8(0);                           // catchup_policy (0 = no-backfill)
     w.u64(0.0);                        // gas_hint (0 = use plan default)
-    if (hasJob) w.u8(task.functionKind);
+    if (hasJob || startJob) w.u8(task.functionKind);
   }
   return w.toBytes();
 }

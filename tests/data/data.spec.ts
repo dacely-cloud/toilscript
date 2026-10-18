@@ -99,6 +99,7 @@ function testScalars(): void {
   m.e = -100; m.f = -30000; m.g = -2000000000; m.h = -9000000000000000000;
   m.p = 3.5; m.q = -1.25; m.r = true; m.s = "scalars";
 
+  assert(m.encodedSize() == m.encode().byteLength);
   const d = AllScalars.decode(m.encode());
   assert(d.a == 200 && d.b == 60000 && d.c == 4000000000 && d.d == 0xFFFFFFFFFFFFFFFF);
   assert(d.e == -100 && d.f == -30000 && d.g == -2000000000 && d.h == -9000000000000000000);
@@ -172,6 +173,7 @@ function testArrays(): void {
   const i2 = new Inner(); i2.v = 20; i2.s = "y";
   m.items = [i1, i2];
 
+  assert(m.encodedSize() == m.encode().byteLength);
   const d = Bag.decode(m.encode());
   assert(d.nums.length == 3 && d.nums[2] == 0xFFFFFFFFFFFFFFFF);
   assert(d.strs.length == 2 && d.strs[1] == "bb");

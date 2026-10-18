@@ -28,7 +28,7 @@ class Item {
 
 @database
 class DB {
-    @collection({ fillMaxWaitMs: 7, fillStale: "deny" })
+    @collection({ fillMaxWaitMs: 7, fillStale: "deny", replication: "localOnly", placement: "local" })
     static items: Documents<Key, Item>; // new STATIC form (no `!`; plugin-free editor)
     @collection static hits: Counter<Key>; // new STATIC form (no `!`)
     @collection legacy!: Events<Key, Item>; // legacy INSTANCE form, still supported

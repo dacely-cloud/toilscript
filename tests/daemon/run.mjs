@@ -63,6 +63,15 @@ if (logInstance.exports.daemon_start() !== 0 || loggedText !== "daemon ready")
     throw new Error("daemon Log did not run successfully during startup");
 console.log("  ok   cold console rejected; Log runs during daemon startup");
 
+// Job startup is versioned separately so older hosts fail closed.
+const startApp=join(tmp,"startup.ts"), startOut=join(tmp,"startup.wasm");
+writeFileSync(startApp, '@daemon class Jobs { @job onStart():void {} }');
+const started=spawnSync("node",[join(root,"bin","toilscript.js"),startApp,"-o",startOut,"--runtime","stub","--targetMode","cold"],{encoding:"utf8"});
+assert.equal(started.status,0,started.stdout+started.stderr);
+const startModule=new WebAssembly.Module(readFileSync(startOut));
+const startSection=new Uint8Array(WebAssembly.Module.customSections(startModule,"toildaemon.catalog")[0]);
+assert.deepEqual(Array.from(startSection),[3,0,1,2,0,0]);
+
 // Job permissions must be carried to the host; decorator order and cron do not alter task IDs.
 const kindApp = join(tmp, "kinds.ts");
 const kindOut = join(tmp, "kinds.wasm");

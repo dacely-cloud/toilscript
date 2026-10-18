@@ -223,6 +223,7 @@ class Dependee {
 function dbOpOf(family: string, method: string): string {
   switch (family) {
     case "Documents": {
+      if (method == "scan") return "DocumentsScan";
       if (method == "get" || method == "getSnapshot" || method == "getCurrentSnapshot" || method == "require") return "Get";
       if (method == "getMany") return "GetMany";
       if (method == "exists") return "Exists";
@@ -263,7 +264,14 @@ function dbOpOf(family: string, method: string): string {
     }
     case "Membership": {
       if (method == "contains") return "MembershipContains";
-      if (method == "list" || method == "listPage") return "MembershipList";
+      if (method == "list") return "MembershipList";
+      if (method == "listPage") return "MembershipPage";
+      if (method == "add") return "MembershipAdd";
+      if (method == "remove") return "MembershipRemove";
+      return "";
+    }
+    case "SortedIndex": {
+      if (method == "page") return "MembershipPage";
       if (method == "add") return "MembershipAdd";
       if (method == "remove") return "MembershipRemove";
       return "";
@@ -283,11 +291,11 @@ function dbOpOf(family: string, method: string): string {
 function isDbReadOp(op: string): bool {
   return op == "Get" || op == "GetMany" || op == "Exists" || op == "ViewGet" ||
     op == "EventsGet" || op == "EventsLast" || op == "CounterGet" || op == "UniqueLookup" || op == "Latest" || op == "EventsSince" ||
-    op == "MembershipContains" || op == "MembershipList" || op == "CapacityAvailable";
+    op == "DocumentsScan" || op == "MembershipContains" || op == "MembershipList" || op == "MembershipPage" || op == "CapacityAvailable";
 }
 
 function isDbScanOp(op: string): bool {
-  return op == "Latest" || op == "MembershipList" || op == "EventsSince";
+  return op == "DocumentsScan" || op == "Latest" || op == "MembershipList" || op == "EventsSince";
 }
 
 /** Static mirror of the edge `allowed_ops::kind_allows` (spec 6). */
@@ -373,6 +381,8 @@ export class Parser extends DiagnosticEmitter {
   toildbWoven: bool = false;
   /** Guards `weaveDeriveHandlers` so the module-level `derive_run` export is emitted once. */
   toildbDerivesWoven: bool = false;
+  toilUserBindingPresent: bool = false;
+  toilDefaultUserWoven: bool = false;
   /** Current overridden module name. */
   currentModuleName: string | null = null;
   // TODO: Remove when multi-value feature will enable by default.
@@ -719,6 +729,7 @@ export class Parser extends DiagnosticEmitter {
 
   /** Finishes parsing. */
   finish(): void {
+    this.weaveDefaultAuthUserBinding();
     if (this.backlog.length) throw new Error("backlog is not empty");
     // ToilDB: compile-time function-kind permission check (mirrors the edge
     // runtime gate) over the now-complete program. Runs before the cleanup so
@@ -735,6 +746,28 @@ export class Parser extends DiagnosticEmitter {
     this.dependees.clear();
     this.restImportedSources.clear();
     this.rpcImportedSources.clear();
+  }
+
+  /** The framework can expose the standard signed principal without a generated
+   * application codec. An explicit @user always retains its typed bridge. */
+  weaveDefaultAuthUserBinding(): void {
+    if (this.toilDefaultUserWoven) return;
+    this.toilDefaultUserWoven = true;
+    if (this.toilUserBindingPresent) return;
+    for (let i = 0; i < this.sources.length; i++) {
+      let statements = this.sources[i].statements;
+      for (let j = 0; j < statements.length; j++) {
+        let statement = statements[j];
+        if (statement.kind != NodeKind.ClassDeclaration) continue;
+        let declaration = <ClassDeclaration>statement;
+        if (declaration.name.text != "__ToilBuiltinAuthUser") continue;
+        this.injectTopLevelStatements(declaration,
+          "@global class AuthUser extends __ToilBuiltinAuthUser {}\n" +
+          "@global function __toilDecodeAuthUser(__b: Uint8Array): AuthUser {" +
+          "return changetype<AuthUser>(__toilDecodeBuiltinAuthUser(__b));}\n");
+        return;
+      }
+    }
   }
 
   /** Synthesize the module-level `derive_run(derive_id)` export for
@@ -2824,6 +2857,7 @@ export class Parser extends DiagnosticEmitter {
     // own the message-boundary typeId.
     this.injectClassMember(declaration, "encodeInto(__w: DataWriter): void{" + writes + "}");
     this.injectClassMember(declaration, "encode(): Uint8Array{const __w=new DataWriter();__w.writeU32(" + typeId + ");this.encodeInto(__w);return __w.toBytes();}");
+    this.injectClassMember(declaration, "encodedSize(): i32{return this.encode().byteLength;}");
     this.injectClassMember(declaration, "static decodeFrom(__r: DataReader): " + className + "{const __o=new " + className + "();" + reads + "return __o;}");
     this.injectClassMember(declaration, "static decode(__buf: Uint8Array): " + className + "{const __r=new DataReader(__buf);__r.readU32();return " + className + ".decodeFrom(__r);}");
     // Instance decode, the mirror of `encode()`: reads a full message into `this`.
@@ -2983,7 +3017,7 @@ export class Parser extends DiagnosticEmitter {
       // returns a Response (429 / 401) that the widened RpcFn (-> Response) surfaces via Rpc.dispatch.
       let guards = this.ratelimitGuardOf(method);
       if (classAuth || this.hasDecoratorKind(method.decorators, DecoratorKind.Auth)) {
-        guards += "if(!AuthService.hasSession()){return __toilRpcResp.text(\"unauthorized\\n\",401);}";
+        guards += "if(!AuthService.hasSession()){return __toilRpcResp.text(\"unauthorized\\n\",401).setCookie(AuthService.clearSession()).setCookie(AuthService.clearUserCookie());}";
       }
       let retNode = method.signature.returnType;
       let body = guards + "const __r=new DataReader(__body);" + decode;
@@ -3192,7 +3226,7 @@ export class Parser extends DiagnosticEmitter {
     // `@ratelimit` / `@auth` on the free @remote, mirroring the @service path (each returns a Response).
     let guards = this.ratelimitGuardOf(fn);
     if (this.hasDecoratorKind(fn.decorators, DecoratorKind.Auth)) {
-      guards += "if(!AuthService.hasSession()){return __toilRpcResp.text(\"unauthorized\\n\",401);}";
+      guards += "if(!AuthService.hasSession()){return __toilRpcResp.text(\"unauthorized\\n\",401).setCookie(AuthService.clearSession()).setCookie(AuthService.clearUserCookie());}";
     }
     let retNode = fn.signature.returnType;
     let dispatchName = "__toilRpcFn_" + fnName;
@@ -3646,6 +3680,7 @@ export class Parser extends DiagnosticEmitter {
    * `AuthUser` (a natural compile error).
    */
   private injectUserBinding(declaration: ClassDeclaration): void {
+    this.toilUserBindingPresent = true;
     let className = declaration.name.text;
     this.injectTopLevelStatements(declaration,
       "// @ts-ignore: injected\n@global class AuthUser extends " + className + " {}\n");
@@ -3824,7 +3859,7 @@ export class Parser extends DiagnosticEmitter {
     // reads the current request's session cookie. The handler then calls
     // `AuthService.getUser()` for the typed user.
     if (classAuth || this.hasDecoratorKind(method.decorators, DecoratorKind.Auth)) {
-      s += "if(!AuthService.hasSession()){return __toilResp.text(\"unauthorized\\n\",401);}";
+      s += "if(!AuthService.hasSession()){return __toilResp.text(\"unauthorized\\n\",401).setCookie(AuthService.clearSession()).setCookie(AuthService.clearUserCookie());}";
     }
     if (bodyType != null) {
       if (stream == "Binary") {

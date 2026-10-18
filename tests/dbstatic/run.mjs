@@ -166,6 +166,8 @@ if (items.schemaVersion === fnv1a("Item")) fail("schema_version is still the val
 if (items.valueDataId !== fnv1a("Item")) fail("value_data_id must remain the value-name hash");
 if (items.fillMaxWaitMs !== 7 || items.fillAllowStale !== 0)
     fail(`items fill policy wrong: wait=${items.fillMaxWaitMs} stale=${items.fillAllowStale}`);
+if (items.replication !== 5 || items.placement !== 1) fail("explicit collection placement/replication did not reach the catalog");
+if (legacy.replication !== 0 || legacy.placement !== 0) fail("default collection policies changed");
 // items and legacy share the value type Item, so they share a schema_version.
 if (items.schemaVersion !== legacy.schemaVersion) fail("same value type must yield the same schema_version");
 if (legacy.fillMaxWaitMs !== 50 || legacy.fillAllowStale !== 1)
