@@ -8,7 +8,7 @@
     "toilscript",
     "wasm"
   ],
-  "version": "0.1.65",
+  "version": "0.1.66",
   "author": "Daniel Wirtz <dcode+assemblyscript@dcode.io>",
   "license": "Apache-2.0",
   "homepage": "https://github.com/dacely-cloud/toilscript",
@@ -38,6 +38,7 @@
     "glob": "^13.0.6",
     "globals": "^17.7.0",
     "typescript": "^6.0.3",
+    "typescript7": "npm:typescript@7.0.2",
     "typescript-eslint": "^8.63.0"
   },
   "type": "module",
@@ -59,7 +60,10 @@
       "import": "./lib/binaryen.js",
       "types": "./lib/binaryen.d.ts"
     },
-    "./*": "./*"
+    "./*": "./*",
+    "./shared": {
+      "types": "./std/shared.d.ts"
+    }
   },
   "imports": {
     "#rtrace": {
@@ -74,14 +78,14 @@
   "scripts": {
     "prepare": "node scripts/build",
     "check": "npm run check:config && npm run check:import && npm run lint",
-    "check:config": "tsc --noEmit -p src --diagnostics --listFiles",
-    "check:import": "tsc --noEmit --skipLibCheck --target ESNEXT --module nodenext --moduleResolution nodenext --experimentalDecorators tests/import/index",
+    "check:config": "node node_modules/typescript/bin/tsc --noEmit -p src --diagnostics --listFiles",
+    "check:import": "node node_modules/typescript/bin/tsc --noEmit --skipLibCheck --target ESNEXT --module nodenext --moduleResolution nodenext --experimentalDecorators tests/import/index",
     "lint": "eslint --max-warnings 0 --ext js . && eslint --max-warnings 0 --ext ts .",
     "build": "node scripts/build",
     "prepublishOnly": "node scripts/build",
     "watch": "node scripts/build --watch",
     "coverage": "npx c8 -- npm test",
-    "test": "npm run test:parser && npm run test:compiler -- --parallel && npm run test:browser && npm run test:toilconfig && npm run test:transform && npm run test:cli && npm run test:json && npm run test:data && npm run test:dbresolve && npm run test:dbstatic && npm run test:dbtypes && npm run test:routekinds && npm run test:derive && npm run test:streams && npm run test:daemon && npm run test:dberror && npm run test:events && npm run test:uniquebatch && npm run test:membership && npm run test:event-redaction",
+    "test": "npm run test:parser && npm run test:compiler -- --parallel && npm run test:browser && npm run test:toilconfig && npm run test:transform && npm run test:cli && npm run test:json && npm run test:data && npm run test:dbresolve && npm run test:dbstatic && npm run test:dbtypes && npm run test:routekinds && npm run test:auth-guards && npm run test:reported-bugs && npm run test:checked && npm run test:derive && npm run test:streams && npm run test:daemon && npm run test:dberror && npm run test:events && npm run test:uniquebatch && npm run test:membership && npm run test:sorted-index && npm run test:event-redaction && npm run test:shared && npm run test:unicode",
     "test:parser": "node --enable-source-maps tests/parser",
     "test:compiler": "node --enable-source-maps --no-warnings tests/compiler",
     "test:browser": "node --enable-source-maps tests/browser",
@@ -91,13 +95,18 @@
     "test:transform:cjs": "node bin/toilscript tests/compiler/empty --transform ./tests/transform/cjs/index.js --noEmit && node bin/toilscript tests/compiler/empty --transform ./tests/transform/cjs/simple.js --noEmit",
     "test:cli": "node tests/cli/options.js",
     "test:json": "node tests/json/run.mjs",
-    "test:data": "node tests/data/run.mjs",
+    "test:data": "node tests/data/run.mjs && npm run test:editor",
+    "test:editor": "node tests/editor/run.mjs",
     "test:dbresolve": "node tests/dbresolve/run.mjs",
     "test:dbstatic": "node tests/dbstatic/run.mjs",
     "test:dbtypes": "node tests/dbtypes/run.mjs",
+    "test:checked": "node tests/checked/run.mjs",
+    "test:reported-bugs": "node tests/reported-bugs/run.mjs",
+    "test:auth-guards": "node tests/auth-guards/run.mjs",
     "test:routekinds": "node tests/routekinds/run.mjs",
     "test:derive": "node tests/derive/run.mjs",
     "test:streams": "node tests/streams/run.mjs && node tests/streams/catalog.mjs && node tests/streams/codegen.mjs",
+    "test:sorted-index": "node tests/sorted-index/run.mjs",
     "test:membership": "node tests/membership/run.mjs",
     "test:event-redaction": "node tests/event-redaction/run.mjs",
     "test:daemon": "node tests/daemon/run.mjs",
@@ -111,7 +120,10 @@
     "bootstrap": "npm run bootstrap:debug && npm run bootstrap:release",
     "bootstrap:debug": "node bin/toilscript --config src/toilconfig.json --target debug && node bin/toilscript --config src/toilconfig.json --target debug-bootstrap --wasm ./build/toilscript.debug.js && node bin/toilscript --config src/toilconfig.json --target debug-bootstrap --wasm ./build/toilscript.debug-bootstrap.js && git --no-pager diff --no-index build/toilscript.debug.wast build/toilscript.debug-bootstrap.wast",
     "bootstrap:release": "node bin/toilscript --config src/toilconfig.json --target release && node bin/toilscript --config src/toilconfig.json --target release-bootstrap --wasm ./build/toilscript.release.js && node bin/toilscript --config src/toilconfig.json --target release-bootstrap --wasm ./build/toilscript.release-bootstrap.js && git --no-pager diff --no-index build/toilscript.release.wast build/toilscript.release-bootstrap.wast",
-    "bootstrap:rtraced": "node bin/toilscript --config src/toilconfig.json --target rtraced && node bin/toilscript --config src/toilconfig.json --target rtraced --wasm ./build/toilscript.rtraced.js"
+    "bootstrap:rtraced": "node bin/toilscript --config src/toilconfig.json --target rtraced && node bin/toilscript --config src/toilconfig.json --target rtraced --wasm ./build/toilscript.rtraced.js",
+    "test:shared": "node tests/shared/run.mjs",
+    "gen:unicode": "node scripts/gen-unicode.mjs",
+    "test:unicode": "node tests/unicode/run.mjs"
   },
   "files": [
     "bin/",

@@ -5,7 +5,7 @@
     "module": "commonjs",
     "noLib": true,
     "allowJs": false,
-    "typeRoots": [ "types" ],
+    "typeRoots": [ "types", "../../@types", "../.." ],
     "types": [ "assembly" ],
     "plugins": [ { "name": "toilscript/std/ts-plugin.cjs" } ],
     "paths": {

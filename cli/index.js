@@ -32,6 +32,7 @@ import { Colors } from "../util/terminal.js";
 import { utf8 } from "../util/text.js";
 import * as optionsUtil from "../util/options.js";
 import * as generated from "./index.generated.js";
+import { buildEditorTypes } from "./editor.js";
 
 import binaryen from "../lib/binaryen.js";
 import * as assemblyscriptJS from "toilscript";
@@ -1095,6 +1096,15 @@ export async function main(argv, options) {
       } else {
         stderr.write(`Skipped JavaScript binding (no output path)${EOL}`);
       }
+    }
+
+    // Editor-only declarations do not change the compiled module or its codec.
+    if (opts.editorTypes != null && opts.editorTypes.length) {
+      if (!opts.editorTypes.endsWith(".d.ts")) {
+        return prepareResult(Error("--editorTypes must name a .d.ts file"));
+      }
+      pending.push(writeFile(opts.editorTypes,
+        buildEditorTypes(program, assemblyscript, opts.editorTypes, baseDir), baseDir));
     }
 
     // Write the RPC client module (@data codec + typed Server surface)

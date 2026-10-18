@@ -177,6 +177,9 @@ jobs:
           TAG="${{ github.ref_name }}"
           DATE=$(date +%Y-%m-%d)
           NEW_HEADER="## [$TAG] - $DATE"
+          if [ -f CHANGELOG.md ] && grep -Fq "## [$TAG] - " CHANGELOG.md; then
+            exit 0
+          fi
 
           # Write changelog content to temp file using env var (avoids shell escaping)
           printf '%s\n' "$CHANGELOG_CONTENT" > /tmp/new_entry.md
@@ -228,12 +231,29 @@ jobs:
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Use reviewed release notes
+        id: release_notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          FALLBACK_NOTES: ${{ steps.changelog.outputs.changelog }}
+        run: |
+          python3 - <<'PYNOTES'
+          import os, pathlib, re, uuid
+          text = pathlib.Path('CHANGELOG.md').read_text()
+          pattern = r'(?ms)^## \[' + re.escape(os.environ['RELEASE_TAG']) + r'\][^\n]*\n(.*?)(?=^## \[|\Z)'
+          match = re.search(pattern, text)
+          body = match.group(1).strip() if match else os.environ['FALLBACK_NOTES'].strip()
+          delimiter = 'RELEASE_NOTES_' + uuid.uuid4().hex
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('body<<' + delimiter + '\n' + body + '\n' + delimiter + '\n')
+          PYNOTES
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changelog }}
+          body: ${{ steps.release_notes.outputs.body }}
           prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
           generate_release_notes: false
         env:

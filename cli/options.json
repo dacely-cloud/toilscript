@@ -33,6 +33,12 @@
     "description": "Built-in auth: inject the reserved toilUserId + username fields into the single @user (used by the toiljs server.auth build when the app declares its own @user).",
     "type": "b"
   },
+  "editorTypes": {
+    "category": "Output",
+    "description": "Write editor-only .d.ts augmentations for generated @data/@user codecs (supports TypeScript 7 and WebStorm without a TS plugin). Include this output in the server tsconfig.json.",
+    "type": "s",
+    "isPath": true
+  },
   "noConfigEntries": {
     "category": "General",
     "description": "Ignore the toilconfig 'entries' array and compile ONLY the entry files given on the command line. Used by the toiljs multi-artifact build, which hands each pass (request/stream/daemon) its own entry subset.",

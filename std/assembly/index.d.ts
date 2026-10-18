@@ -1732,6 +1732,11 @@ declare class _Float {
   toString(radix?: number): string;
 }
 
+/** Primitive numeric aliases retain their runtime string conversion. */
+interface Number {
+  toString(radix?: number): string;
+}
+
 declare class Boolean {
   toString(radix?: number): string;
 }
@@ -2140,6 +2145,7 @@ declare class String {
   at(index: i32): string;
   charAt(index: i32): string;
   charCodeAt(index: i32): i32;
+  normalize(form?: string): string;
   codePointAt(index: i32): i32;
   concat(other: string): string;
   endsWith(other: string): bool;

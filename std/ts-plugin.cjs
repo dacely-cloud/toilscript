@@ -26,8 +26,11 @@ const DECLARED_NEVER_USED = new Set([6133, 6196]);
 const DATA_MEMBERS = new Set([
   'encode',
   'encodeInto',
+  'encodedSize',
   'decode',
   'decodeFrom',
+  'decodeInto',
+  'decodeIntoVersioned',
   'toJSON',
   'fromJSON',
   'dataId',
@@ -189,8 +192,8 @@ function init(modules) {
       // Both `@data` and `@user` classes get the compiler-injected binary codec.
       out +=
         `\n// toilscript: editor types for the compiler-injected ${isUser ? '@user' : '@data'} ${n} codec\n` +
-        `${exp}interface ${n} { encode(): Uint8Array; toJSON(): JSON; }\n` +
-        `${exp}declare namespace ${n} { function decode(buf: Uint8Array): ${n}; function fromJSON(v: JSON): ${n}; function dataId(): u32; }\n`;
+        `${exp}interface ${n} { encode(): Uint8Array; encodeInto(writer: DataWriter): void; encodedSize(): i32; decodeInto(buf: Uint8Array): void; decodeIntoVersioned(buf: Uint8Array, version: i64): void; toJSON(): JSON; }\n` +
+        `${exp}declare namespace ${n} { function decode(buf: Uint8Array): ${n}; function decodeFrom(reader: DataReader): ${n}; function fromJSON(v: JSON): ${n}; function dataId(): u32; }\n`;
       // The single `@user` class is also the type of `AuthService.getUser()`
       // everywhere: merge it into the global `__ToilAuthUser` interface that the
       // generated env d.ts returns from `getUser()`. `declare global` when the

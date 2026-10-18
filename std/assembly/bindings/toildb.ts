@@ -23,6 +23,17 @@
 // is the `@data` binary codec (`DataWriter`/`DataReader`).
 
 export namespace toildbHost {
+  @external("env", "data.continue_derive")
+  export declare function continueDerive(): i32;
+
+  @external("env", "data.begin_derive")
+  export declare function beginDerive(dbPtr: usize, dbLen: i32, methodPtr: usize, methodLen: i32): i32;
+  @external("env", "data.end_derive")
+  export declare function endDerive(): i32;
+
+  @external("env", "data.changes")
+  export declare function changes(outPtr: usize, outCap: i32): i32;
+
   // Resolve a collection by its "<db>/<collection>" name; writes the u32 handle
   // to outHandlePtr. Returns 0 on success or a negative TDL code.
   // @ts-ignore: decorator
@@ -193,6 +204,9 @@ export namespace toildbHost {
 
   // Ordered membership page: list frame + optional length-prefixed raw cursor.
   // @ts-ignore: decorator
+  @external("env", "data.documents_scan")
+  export declare function documentsScan(handle:u32,cursorPtr:usize,cursorLen:i32,limit:i32):i32;
+
   @external("env", "data.membership_page")
   export declare function membershipPage(
     handle: u32, setPtr: usize, setLen: i32, cursorPtr: usize, cursorLen: i32, limit: i32
@@ -340,6 +354,18 @@ export namespace toildbHost {
   // @ts-ignore: decorator
   @external("env", "data.write_allowed")
   export declare function writeAllowed(): i32;
+
+  @external("env", "data.job_allowed")
+  export declare function jobAllowed(): i32;
+
+  @external("env", "data.atomic_get")
+  export declare function atomicGet(handle: u32, partitionPtr: usize, partitionLen: i32, keyPtr: usize, keyLen: i32): i32;
+
+  @external("env", "data.atomic_batch")
+  export declare function atomicBatch(ptr: usize, len: i32): i32;
+
+  @external("env", "data.budget")
+  export declare function budget(outPtr: usize, outCap: i32): i32;
 }
 
 // Per-domain analytics read. The host stashes a versioned little-endian TenantStats
