@@ -3944,7 +3944,8 @@ export class Parser extends DiagnosticEmitter {
 
   /**
    * The integer strategy tag to emit for a `@ratelimit` strategy argument:
-   * `RateLimit.SlidingWindow` -> "1", `RateLimit.TokenBucket` -> "2", any other
+   * `RateLimit.SlidingWindow` -> "1", `RateLimit.TokenBucket` -> "2",
+   * `RateLimit.TrailingWindow` -> "3", any other
    * member (incl. `FixedWindow`) -> "0", an explicit integer literal passes
    * through verbatim (the host clamps an unknown tag to FixedWindow). Returns
    * "" when the argument is neither, so the caller emits no guard.
@@ -3955,6 +3956,7 @@ export class Parser extends DiagnosticEmitter {
       let p = (<PropertyAccessExpression>arg).property.text;
       if (p == "SlidingWindow") return "1";
       if (p == "TokenBucket") return "2";
+      if (p == "TrailingWindow") return "3";
       return "0"; // FixedWindow or any unknown member -> cheapest always-on default
     }
     return "";

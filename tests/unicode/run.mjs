@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,14 +11,25 @@ try {
   const result=spawnSync(process.execPath,[resolve('bin/toilscript.js'),resolve('tests/unicode/fixture.ts'),'-o',out,
     '--runtime','incremental','--exportRuntime','--memoryBase','65536'],{encoding:'utf8'});
   assert.equal(result.status,0,result.stdout+result.stderr);
+  const compositionSource=readFileSync('std/assembly/util/unicode-data.ts','utf8').match(/const COMPOSITIONS:usize=memory.data<i32>\(\[([\s\S]*?)\]\)/)[1];
+  const compositionValues=compositionSource.split(',').map(x=>x.trim()).filter(Boolean).slice(0,24).map(Number);
+  const signature=Buffer.alloc(compositionValues.length*4);
+  compositionValues.forEach((value,i)=>signature.writeInt32LE(value,i*4));
+  for(const form of ['NFC','NFD','NFKC','NFKD']) {
+    const source=join(tmp,form+'.ts'), artifact=join(tmp,form+'.wasm');
+    writeFileSync(source,`export function run(input:string):string { return input.normalize('${form}'); }`);
+    const compiled=spawnSync(process.execPath,[resolve('bin/toilscript.js'),source,'-o',artifact,'--runtime','stub','-O3'],{encoding:'utf8'});
+    assert.equal(compiled.status,0,compiled.stdout+compiled.stderr);
+    assert.equal(readFileSync(artifact).includes(signature),form.endsWith('C'),`${form} composition table inclusion`);
+  }
   const {instance}=await WebAssembly.instantiate(readFileSync(out),{env:{abort:()=>{throw new Error('Wasm abort');}}});
   const api=instance.exports;
   let comparisons=0;
-  function normalize(input,form) {
+  function normalize(input,form,literal=false) {
     const bytes=Buffer.from(input,'utf16le');
     assert(bytes.length<32768);
     new Uint8Array(api.memory.buffer).set(bytes,0);
-    const length=api.normalize(0,bytes.length,form);
+    const length=(literal?api.normalizeLiteral:api.normalize)(0,bytes.length,form);
     assert(length>=0 && length<=32768);
     const output=Buffer.from(api.memory.buffer,32768,length).toString('utf16le');
     if(++comparisons%256===0) api.__collect();
@@ -33,7 +44,7 @@ try {
     const columns=text.split(';').slice(0,5).map(decode);
     const expected=[ [1,1,1,3,3], [2,2,2,4,4], [3,3,3,3,3], [4,4,4,4,4] ];
     for(let form=0;form<4;form++) for(let col=0;col<5;col++) {
-      assert.equal(normalize(columns[col],form),columns[expected[form][col]],`corpus line ${lineNumber}, form ${form}, column ${col}`);
+      for(const literal of [false,true]) assert.equal(normalize(columns[col],form,literal),columns[expected[form][col]],`corpus line ${lineNumber}, form ${form}, column ${col}, literal ${literal}`);
     }
   }
   // Unpaired UTF-16 units are preserved. Long reverse-class runs exercise merge sorting.
@@ -55,5 +66,41 @@ try {
     const flags=properties.reduce((bits,re,i)=>bits|(Number(re.test(value))<<i),0);
     assert.equal(api.properties(cp),flags,`properties U+${cp.toString(16)}`);
   }
+  // Every Unicode 17 simple mapping, independent of the host Node Unicode version.
+  let lowerChecks=0;
+  for(const [cp,lower] of JSON.parse(readFileSync('tests/unicode/lowercase.json','utf8'))) {
+    const bytes=Buffer.from(String.fromCodePoint(cp),'utf16le');
+    new Uint8Array(api.memory.buffer).set(bytes,0);
+    const length=api.lowercase(0,bytes.length);
+    const expected=cp===0x130 ? 'i\u0307' : String.fromCodePoint(lower);
+    assert.equal(Buffer.from(api.memory.buffer,32768,length).toString('utf16le'),expected,`lowercase U+${cp.toString(16)}`);
+    if(++lowerChecks%256===0) api.__collect();
+  }
+  for(const [input,expected] of [
+    [' AΣ',' aς'], ['\u1c89Σ','\u1c8aς'], ['AΣ\u1c89','aσ\u1c8a'],
+    ['A'+'\u0301'.repeat(64)+'Σ','a'+'\u0301'.repeat(64)+'ς'],
+    ['AΣ'+'\u0301'.repeat(64)+'B','aσ'+'\u0301'.repeat(64)+'b'],
+    ['\u0345Σ','\u0345σ'], ['A\u0345Σ','a\u0345ς'],
+  ]) {
+    const bytes=Buffer.from(input,'utf16le');
+    new Uint8Array(api.memory.buffer).set(bytes,0);
+    const length=api.lowercase(0,bytes.length);
+    assert.equal(Buffer.from(api.memory.buffer,32768,length).toString('utf16le'),expected,`contextual lowercase ${JSON.stringify(input)}`);
+  }
+  const mask=(1n<<64n)-1n;
+  let seed=0x123456789abcdefn;
+  const values=[0n,1n,mask,mask+1n,(1n<<128n)-1n,(1n<<256n)-1n];
+  for(let power=1n;power<(1n<<256n);power*=10n) values.push(power-1n,power,power+1n);
+  for(let i=0;i<4000;i++) {
+    seed=BigInt.asUintN(256,seed*0x2360ed051fc65da44385df649fccf645n+0x123456789n);
+    values.push(seed);
+  }
+  for(const value of values) for(const wide of [0,1]) {
+    const n=BigInt.asUintN(wide?256:128,value);
+    const length=api.decimal(n&mask,(n>>64n)&mask,(n>>128n)&mask,(n>>192n)&mask,wide);
+    assert.equal(Buffer.from(api.memory.buffer,32768,length).toString('utf16le'),n.toString(),`decimal ${n}`);
+    api.__collect();
+  }
+  console.log(`${lowerChecks} Unicode 17 lowercase mappings and ${values.length*2} decimal conversions passed`);
   console.log(`Unicode 17: ${comparisons} normalization conformance checks and ${points.length} category/property checks passed`);
 } finally {rmSync(tmp,{recursive:true,force:true});}

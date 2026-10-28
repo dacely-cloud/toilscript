@@ -1,6 +1,7 @@
 // Unicode 17.0.0 normalization (UAX #15) and General_Category properties.
 import {
   CATEGORIES, CATEGORIES_COUNT, CATEGORY_NAMES, COMBINING, COMBINING_COUNT,
+  LOWERCASE, LOWERCASE_COUNT, CASED, CASED_COUNT, CASE_IGNORABLE, CASE_IGNORABLE_COUNT,
   WHITESPACE, WHITESPACE_COUNT, DECOMPOSITIONS, DECOMPOSITIONS_COUNT,
   DECOMPOSED_POINTS, COMPOSITIONS, COMPOSITIONS_COUNT,
 } from "./util/unicode-data";
@@ -25,6 +26,18 @@ function rangeProperty(table: usize, count: i32, cp: i32): i32 {
 @inline
 function combiningClass(cp: i32): i32 {
   return rangeProperty(COMBINING, COMBINING_COUNT, cp);
+}
+
+/** Unicode 17 simple lowercase mapping; String handles full/contextual cases. */
+export function lowercaseCodePoint(cp: i32): i32 {
+  return cp + rangeProperty(LOWERCASE, LOWERCASE_COUNT, cp);
+}
+
+export function isCasedCodePoint(cp: i32): bool {
+  return rangeProperty(CASED, CASED_COUNT, cp) != 0;
+}
+export function isCaseIgnorableCodePoint(cp: i32): bool {
+  return rangeProperty(CASE_IGNORABLE, CASE_IGNORABLE_COUNT, cp) != 0;
 }
 
 @global
@@ -146,10 +159,7 @@ function compose(points: Array<i32>): void {
   points.length = out;
 }
 
-export function normalizeString(input: string, form: string): string {
-  const compatibility = form == "NFKC" || form == "NFKD";
-  const composed = form == "NFC" || form == "NFKC";
-  if (!compatibility && form != "NFC" && form != "NFD") throw new RangeError("Invalid normalization form");
+function decomposedPoints(input: string, compatibility: bool): Array<i32> {
   const points = new Array<i32>();
   for (let i = 0; i < input.length; i++) {
     const cp = input.codePointAt(i);
@@ -157,7 +167,10 @@ export function normalizeString(input: string, form: string): string {
     decompose(cp, compatibility, points);
   }
   reorder(points);
-  if (composed) compose(points);
+  return points;
+}
+
+function pointsToString(points: Array<i32>): string {
   const units = new Array<i32>();
   for (let i = 0; i < points.length; i++) {
     const cp = points[i];
@@ -169,4 +182,28 @@ export function normalizeString(input: string, form: string): string {
     }
   }
   return String.fromCharCodes(units);
+}
+
+export function normalizeNFD(input: string): string {
+  return pointsToString(decomposedPoints(input, false));
+}
+export function normalizeNFKD(input: string): string {
+  return pointsToString(decomposedPoints(input, true));
+}
+export function normalizeNFC(input: string): string {
+  const points = decomposedPoints(input, false);
+  compose(points);
+  return pointsToString(points);
+}
+export function normalizeNFKC(input: string): string {
+  const points = decomposedPoints(input, true);
+  compose(points);
+  return pointsToString(points);
+}
+export function normalizeString(input: string, form: string): string {
+  if (form == "NFD") return normalizeNFD(input);
+  if (form == "NFKD") return normalizeNFKD(input);
+  if (form == "NFC") return normalizeNFC(input);
+  if (form == "NFKC") return normalizeNFKC(input);
+  throw new RangeError("Invalid normalization form");
 }

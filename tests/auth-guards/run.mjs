@@ -33,7 +33,23 @@ import { Request, Response } from 'toiljs/server/runtime';
   export function clearSession(): i32 { return 1; }
   export function clearUserCookie(): i32 { return 2; }
 }
+@global enum RateLimit { TrailingWindow = 3 }
+@global namespace RateLimitService {
+  export let strategy: i32 = -1;
+  export function guard(route:i32, tag:i32, limit:i32, window:i32):Response|null {
+    strategy=tag; return Response.text('limited',429);
+  }
+}
 let calls: i32 = 0;
+@rest('limited') class Limited {
+  @ratelimit(RateLimit.TrailingWindow,10,3600) @get('/') run():Response { calls++; return Response.text('ok'); }
+}
+export function trailingProbe():i32 {
+  calls=0;
+  const response=new Limited().__tryRoute(new Request())!;
+  return RateLimitService.strategy*1000000+response.status*1000+calls;
+}
+
 @auth @rest('guard') class Guard {
   @get('/') run(): Response { calls++; return Response.text('ok'); }
 }
@@ -67,6 +83,7 @@ export function probe(surface: i32, valid: bool): i32 {
   const compiled = spawnSync(process.execPath, [resolve('bin/toilscript.js'), 'app.ts', '-o', out, '--runtime', 'stub'], { cwd: root, encoding: 'utf8' });
   assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
   const { instance } = await WebAssembly.instantiate(readFileSync(out), { env: { abort() { throw new Error('Wasm abort'); } } });
+  assert.equal(instance.exports.trailingProbe(),3429000,'named trailing strategy reaches the guard and refuses the handler');
   for (let surface = 0; surface < 5; surface++) {
     assert.equal(instance.exports.probe(surface, 0), 401120, `surface ${surface} rejects and clears both cookies`);
     assert.equal(instance.exports.probe(surface, 1), 200001, `surface ${surface} calls authenticated handler without clearing cookies`);

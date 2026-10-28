@@ -130,7 +130,7 @@ declare function options(path: string): ToilRouteDecorator;
 declare function cache(edgeMinutes: i32, browserSeconds?: i32, privateScope?: bool, allowAuth?: bool): ToilRouteDecorator;
 
 /** Rate-limiting strategy for `@ratelimit`. Values match the runtime `RateLimit` enum. */
-declare enum RateLimit { FixedWindow, SlidingWindow, TokenBucket }
+declare enum RateLimit { FixedWindow, SlidingWindow, TokenBucket, TrailingWindow }
 
 /** Rate-limit a route: `@ratelimit(strategy, limit, window)`. */
 declare function ratelimit(strategy: RateLimit, limit: i32, window: i32): ToilRouteDecorator;
