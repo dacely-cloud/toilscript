@@ -764,6 +764,7 @@ export namespace BuiltinNames {
   export const Float64Array = "~lib/typedarray/Float64Array";
 
   // std/string.ts
+  export const String_normalize = "~lib/string/String#normalize";
   export const String_raw = "~lib/string/String.raw";
   export const String_eq = "~lib/string/String.__eq";
   export const String_ne = "~lib/string/String.__ne";
@@ -3943,6 +3944,33 @@ function builtin_string_raw(ctx: BuiltinFunctionContext): ExpressionRef {
   return module.unreachable();
 }
 builtinFunctions.set(BuiltinNames.String_raw, builtin_string_raw);
+
+// Literal normalization forms select a separate library entry before code and
+// data emission. Dynamic forms retain the runtime-validated implementation.
+function builtin_string_normalize(ctx: BuiltinFunctionContext): ExpressionRef {
+  const compiler = ctx.compiler;
+  if (checkTypeAbsent(ctx) | checkArgsOptional(ctx, 0, 1)) {
+    compiler.currentType = compiler.program.stringInstance.type;
+    return compiler.module.unreachable();
+  }
+  let form = "NFC";
+  if (ctx.operands.length) {
+    const operand = ctx.operands[0];
+    form = operand.isLiteralKind(LiteralKind.String) ? (<StringLiteralExpression>operand).value : "";
+  }
+  if (form == "NFC" || form == "NFD" || form == "NFKC" || form == "NFKD") {
+    const prototype = compiler.program.elementsByName.get("~lib/unicode/normalize" + form);
+    assert(prototype && prototype.kind == ElementKind.FunctionPrototype);
+    const instance = assert(compiler.resolver.resolveFunction(<FunctionPrototype>prototype, null));
+    compiler.compileFunction(instance);
+    return compiler.compileCallDirect(instance, [assert(ctx.thisOperand)], ctx.reportNode);
+  }
+  const instance = assert(compiler.resolver.resolveFunction(ctx.prototype, null));
+  compiler.compileFunction(instance, true);
+  const thisArg = compiler.compileExpression(assert(ctx.thisOperand), compiler.program.stringInstance.type, Constraints.ConvImplicit);
+  return compiler.compileCallDirect(instance, ctx.operands, ctx.reportNode, thisArg);
+}
+builtinFunctions.set(BuiltinNames.String_normalize, builtin_string_normalize);
 
 // === Portable type conversions ==============================================================
 

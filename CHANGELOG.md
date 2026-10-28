@@ -1,5 +1,14 @@
 # Changelog
 
+## [v0.1.67] - 2026-10-28
+
+- Format u128/u256 decimal strings in 10^19 chunks using native-limb division, replacing per-bit conversion. Maximum-value probes through the native meter improved from 101,229,762 to 505,638 gas for u128 and from 388,102,795 to 952,570 for u256.
+- Generate lowercase and contextual casing properties from pinned Unicode 17 data. Fix final sigma across word boundaries and long runs of case-ignorable characters, including newly cased scripts.
+- Select literal normalization forms before emitting code/data, excluding composition tables from NFD/NFKD-only modules; dynamic forms remain runtime-validated.
+- Emit strategy tag 3 for `RateLimit.TrailingWindow`.
+
+Validation includes the official Unicode normalization corpus through literal and dynamic forms, every simple lowercase mapping, large-integer reference comparisons, compiler fixtures and route-guard execution.
+
 ## [v0.1.66] - 2026-10-18
 
 - Emit plain `@data` / `@user` editor declarations with `--editorTypes`, including typed instance encoders and static decoders. Supports TypeScript 7.0.2 and WebStorm without JavaScript language-service plugins.

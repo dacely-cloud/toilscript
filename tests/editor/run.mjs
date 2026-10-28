@@ -58,7 +58,7 @@ export function run(): void {
   assert.doesNotMatch(generated, /interface Object/);
   // Multi-tier framework builds can include the same shared model more than once.
   copyFileSync(types, join(tmp, "types/second-tier.d.ts"));
-  write("global-use.ts", "const globalRecord: GlobalRecord = GlobalRecord.decode(new GlobalRecord().encode());\n");
+  write("global-use.ts", "const globalRecord: GlobalRecord = GlobalRecord.decode(new GlobalRecord().encode());\nconst trailing: RateLimit = RateLimit.TrailingWindow;\n");
   write("tsconfig.json", JSON.stringify({
     extends: join(root, "std/assembly.json"),
     compilerOptions: { noEmit: true, skipLibCheck: true, types: [join(root, "std/types/assembly")] },

@@ -1,5 +1,5 @@
 /// <reference path="./rt/index.d.ts" />
-import { normalizeString } from "./unicode";
+import { normalizeString, lowercaseCodePoint } from "./unicode";
 import { OBJECT, BLOCK_MAXSIZE, TOTAL_OVERHEAD } from "./rt/common";
 import { Runtime } from "shared/runtime";
 import { compareImpl, strtol, strtod, isSpace, isAscii, isFinalSigma, toLower8, toUpper8 } from "./util/string";
@@ -565,7 +565,7 @@ import { Array } from "./array";
           // Range 0x24B6 <= c <= 0x24CF not covered by casemap and require special early handling
           store<u16>(changetype<usize>(codes) + (j << 1), c + 26);
         } else {
-          let code = casemap(c, 0) & 0x1FFFFF;
+          let code = <u32>lowercaseCodePoint(c);
           if (code < 0x10000) {
             store<u16>(changetype<usize>(codes) + (j << 1), code);
           } else {
@@ -648,7 +648,7 @@ import { Array } from "./array";
     return this;
   }
 
-  normalize(form: string = "NFC"): string {
+  @builtin normalize(form: string = "NFC"): string {
     return normalizeString(this, form);
   }
 }

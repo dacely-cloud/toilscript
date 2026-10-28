@@ -92,60 +92,56 @@ import { u256 } from "./integer/u256";
   return low > load<u64>(MaxBaseForExponent128 + (exponent << 3));
 }
 
-// helper function for utoa
-function processU64(digits: Uint8Array, value: u64): void {
-  var length = digits.length - 1;
-  for (let i = 63; i != -1; --i) {
-    for (let j = 0; j <= length; ++j) {
-      unchecked(digits[j] += (u8(digits[j] >= 5) * 3));
-    }
-    for (let j = length; j != -1; --j) {
-      let d = unchecked(digits[j]) << 1;
-      if (j < length) unchecked(digits[j + 1] |= u8(d > 15));
-      unchecked(digits[j] = d & 15);
-    }
-    unchecked(digits[0] += u8((value & (1 << i)) != 0));
+// Divide a two-limb numerator by 10^19. The high limb must be below the
+// divisor. Knuth's base-2^32 division uses native u64 division and at most two
+// quotient corrections, with no per-bit loops or temporary big integers.
+@lazy let decimalRemainder: u64 = 0;
+function decimalQuotient(lo: u64, hi: u64): u64 {
+  const divisor: u64 = 10000000000000000000;
+  const base: u64 = 0x100000000;
+  const mask: u64 = base - 1;
+  const high = divisor >> 32, low = divisor & mask;
+  let q1 = hi / high, r = hi - q1 * high;
+  while (q1 >= base || q1 * low > (r << 32) + (lo >> 32)) {
+    q1--; r += high;
+    if (r >= base) break;
   }
+  const middle = (hi << 32) + (lo >> 32) - q1 * divisor;
+  let q0 = middle / high;
+  r = middle - q0 * high;
+  while (q0 >= base || q0 * low > (r << 32) + (lo & mask)) {
+    q0--; r += high;
+    if (r >= base) break;
+  }
+  decimalRemainder = (middle << 32) + (lo & mask) - q0 * divisor;
+  return (q1 << 32) + q0;
+}
+
+function limbsToDecimal(limbs: StaticArray<u64>): string {
+  let length = limbs.length;
+  while (length > 0 && unchecked(limbs[length - 1]) == 0) length--;
+  if (length == 0) return "0";
+  let result = "";
+  while (length > 0) {
+    let remainder: u64 = 0;
+    for (let i = length - 1; i >= 0; i--) {
+      unchecked(limbs[i] = decimalQuotient(limbs[i], remainder));
+      remainder = decimalRemainder;
+    }
+    while (length > 0 && unchecked(limbs[length - 1]) == 0) length--;
+    let chunk = remainder.toString();
+    if (length > 0) chunk = "0".repeat(19 - chunk.length) + chunk;
+    result = chunk + result;
+  }
+  return result;
 }
 
 export function u128toDecimalString(value: u128): string {
-  var length = 40;
-  var digits = new Uint8Array(length);
-  var result = "", start = false;
-
-  processU64(digits, value.hi);
-  processU64(digits, value.lo);
-
-  for (let i = length - 1; i != -1; --i) {
-    let d = unchecked(digits[i]);
-    if (!start && d != 0) start = true;
-    if (start) {
-      assert(<u32>d <= 9);
-      result += String.fromCharCode(0x30 + d);
-    }
-  }
-  return result;
+  return limbsToDecimal([value.lo, value.hi]);
 }
 
 export function u256toDecimalString(value: u256): string {
-  var length = 78;
-  var digits = new Uint8Array(length);
-  var result = "", start = false;
-
-  processU64(digits, value.hi2);
-  processU64(digits, value.hi1);
-  processU64(digits, value.lo2);
-  processU64(digits, value.lo1);
-
-  for (let i = length - 1; i != -1; --i) {
-    let d = unchecked(digits[i]);
-    if (!start && d != 0) start = true;
-    if (start) {
-      assert(<u32>d <= 9);
-      result += String.fromCharCode(0x30 + d);
-    }
-  }
-  return result;
+  return limbsToDecimal([value.lo1, value.lo2, value.hi1, value.hi2]);
 }
 
 export function atou128(str: string, radix: i32 = 10): u128 {
