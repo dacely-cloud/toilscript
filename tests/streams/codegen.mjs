@@ -348,6 +348,155 @@ export function probe(): i32 { return 1; }
     }
 }
 
+// 4. TWO SEPARATE SOURCE FILES, each declaring a @stream class, compile into ONE
+//    hot artifact. Regression: the ring runtime + registry + `stream_dispatch` were
+//    injected once per source FILE, so the second `@stream` file redeclared the
+//    `@global` StreamPacket / StreamInbound / StreamOutbound and the build died with
+//    3x TS2300 "Duplicate identifier". The runtime must now be emitted once per
+//    PROGRAM while BOTH boxes still register into the one shared registry.
+//    `handlerCount()` reads the injected `@global` registry FROM THE ENTRY FILE, so a
+//    value of 2 proves both files' thunks landed in a single program-wide array (a
+//    wrong start order would leave 1). `lastBox` is written from the second file to
+//    prove @global cross-file visibility, and the catalog's OWN `stream_index` values
+//    decide which box each selection must reach (see `streamCatalogEntries`), so the
+//    emitter's ordering is checked against the router's ordering rather than itself.
+{
+    const tmp = mkdtempSync(join(tmpdir(), "streamfiles-"));
+    writeFileSync(join(tmp, "alpha.ts"), `
+@global let lastBox: i32 = 0;
+
+@stream("alpha")
+class Alpha {
+  @message reply(p: StreamPacket): StreamOutbound {
+    lastBox = 1;
+    return StreamOutbound.reply(p.bytes());
+  }
+}
+`);
+    writeFileSync(join(tmp, "beta.ts"), `
+@stream("beta")
+class Beta {
+  @message reply(p: StreamPacket): StreamOutbound {
+    lastBox = 2; // written from a DIFFERENT file than the one that declares it
+    return StreamOutbound.reply(p.bytes());
+  }
+}
+`);
+    writeFileSync(join(tmp, "app.ts"), `
+import "./alpha";
+import "./beta";
+
+export function handlerCount(): i32 { return __toilStreamHandlers.length; }
+export function last(): i32 { return lastBox; }
+export function clearLastBox(): void { lastBox = 0; }
+export function probe(): i32 { return 1; }
+`);
+    // Mirror the real consumer: toiljs's `toilscriptPass` hands toilscript EVERY tier
+    // file as a positional entry (`const args = [...files, '--target', 'release']`,
+    // src/compiler/index.ts:679), not just the importing entry. That is why the app's
+    // `server/streams/Echo.ts` export surfaces in release-stream.wasm. Passing only
+    // app.ts would compile the other two as plain modules and hide the export.
+    const out = join(tmp, "out.wasm");
+    const r = spawnSync("node", [bin, join(tmp, "app.ts"), join(tmp, "alpha.ts"), join(tmp, "beta.ts"),
+        "-o", out, "--runtime", "stub", "--targetMode", "hot"], { encoding: "utf8" });
+    const output = (r.stdout || "") + (r.stderr || "");
+    let wasm = null;
+    try { wasm = readFileSync(out); } catch { /* no output on failure */ }
+    const exports = wasm ? wasmExports(wasm) : [];
+    check("two @stream FILES compile (runtime injected once per program)",
+        r.status === 0, `status ${r.status}\n${output}`);
+    check("no TS2300 on the injected @global stream runtime",
+        !/Duplicate identifier 'Stream/.test(output), output.slice(0, 300));
+    check("stream_dispatch exported EXACTLY once for the two-file program",
+        exports.filter((n) => n === "stream_dispatch").length === 1, exports.join(","));
+    check("ring accessors exported EXACTLY once for the two-file program",
+        exports.filter((n) => n === "stream_ring_offset").length === 1, exports.join(","));
+    check("catalog registers BOTH streams", streamCatalogCount(wasm) === 2, `${streamCatalogCount(wasm)}`);
+    check("stream_set_active exported EXACTLY once for the two-file program",
+        exports.filter((n) => n === "stream_set_active").length === 1, exports.join(","));
+    const routes = streamCatalogRoutes(wasm);
+    check("catalog routes /alpha=0, /beta=1",
+        !!routes && routes.map((r) => `${r.route}=${r.index}`).join(",") === "/alpha=0,/beta=1",
+        routes ? routes.map((r) => `${r.route}=${r.index}`).join(",") : "no catalog");
+    if (wasm) {
+        const ex = instantiate(wasm);
+        check("BOTH thunks registered in the one @global registry",
+            ex.handlerCount() === 2, `${ex.handlerCount()}`);
+        // ADDITIVE CONTROL: a host that never selects must behave exactly as a
+        // single-@stream project does today, i.e. every event reaches handler 0.
+        check("no selection: dispatch still routes to handler 0 (alpha)",
+            ex.stream_dispatch(2, 0, 0) === 0n && ex.last() === 1, `${ex.last()}`);
+        // THE FIX, driven by the ROUTER'S OWN index: select the `stream_index` the
+        // catalog records for /beta (the file that did NOT receive the preamble) and
+        // prove the beta thunk runs. This cross-checks registry push order against
+        // catalog order, so an off-by-one or a per-file registry makes it fail.
+        const beta = routes ? routes.find((r) => r.route === "/beta") : null;
+        check("stream_set_active(catalog /beta index) reaches the SECOND box",
+            !!beta && typeof ex.stream_set_active === "function" && (() => {
+                ex.clearLastBox();
+                ex.stream_set_active(beta.index);
+                return ex.stream_dispatch(2, 0, 0) === 0n && ex.last() === 2;
+            })(),
+            beta ? `index ${beta.index}, last ${ex.last()}` : "no /beta route in catalog");
+        // BOUNDARY: an out-of-range index (a host holding a catalog older than the
+        // artifact it just reloaded) is the documented no-op success, not a trap, and
+        // must run NO box at all.
+        check("out-of-range index is a no-trap no-op that runs no box",
+            (() => {
+                ex.clearLastBox();
+                ex.stream_set_active(9);
+                return ex.stream_dispatch(2, 0, 0) === 0n && ex.last() === 0;
+            })(), `last ${ex.last()}`);
+        // Selection is per box LIFETIME, which is what makes the host's per-connection
+        // select() safe: a fresh instance ignores the previous instance's choice.
+        check("a fresh instance defaults to handler 0 (per-connection selection)",
+            (() => {
+                const ex2 = instantiate(wasm);
+                return ex2.stream_dispatch(2, 0, 0) === 0n && ex2.last() === 1;
+            })());
+    }
+    rmSync(tmp, { recursive: true, force: true });
+}
+
+// The (route, stream_index) pairs in toilstream.catalog. This is the host's routing
+// table, read with the SAME field order the maintained catalog.mjs conformance case
+// asserts, so the registry push order can be cross-checked against the order the host
+// will actually route by rather than against the emitter's own claims.
+function streamCatalogRoutes(buf) {
+    if (!buf) return null;
+    const sec = findSection(buf, "toilstream.catalog");
+    if (!sec) return null;
+    let pos = 0;
+    const u16 = () => { const v = sec[pos] | (sec[pos + 1] << 8); pos += 2; return v; };
+    const u8 = () => sec[pos++];
+    const u32 = () => { pos += 4; };
+    const str = () => { const n = (sec[pos] | (sec[pos + 1] << 8) | (sec[pos + 2] << 16) | (sec[pos + 3] << 24)) >>> 0; pos += 4; const s = sec.toString("utf8", pos, pos + n); pos += n; return s; };
+    u16(); /* format_version */
+    const n = u16();
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        str(); /* declared name */
+        const route = str();
+        u8(); /* hook mask */ u8(); /* scope */ u8(); /* message mode */
+        u32(); /* max_frame_bytes */ u32(); /* ingress_ring_bytes */
+        u32(); /* value_data_id */ u32(); /* message_schema_version */
+        out.push({ route, index: u16() });
+    }
+    return out;
+}
+
+// The number of streams in toilstream.catalog (same layout as `streamHookMask`,
+// returning the count instead of stream 0's hook bitmask).
+function streamCatalogCount(buf) {
+    if (!buf) return null;
+    const sec = findSection(buf, "toilstream.catalog");
+    if (!sec) return null;
+    let pos = 0;
+    const u16 = () => { const v = sec[pos] | (sec[pos + 1] << 8); pos += 2; return v; };
+    u16(); /* format_version */
+    return u16(); /* stream count */
+}
+
 if (failures) {
     console.error(`\ndaemon + stream codegen: ${failures} failure(s)`);
     process.exit(1);
