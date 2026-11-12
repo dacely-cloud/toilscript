@@ -352,10 +352,13 @@ export class Parser extends DiagnosticEmitter {
   restImportedSources: Set<string> = new Set();
   /** Normalized paths whose `@service`/`@remote` RPC runtime import has already been injected. */
   rpcImportedSources: Set<string> = new Set();
-  /** Normalized paths whose `@stream` module-level registry + the single
-   *  `stream_dispatch` export have already been emitted (a project may declare
-   *  several `@stream` classes, but the export is emitted exactly once). */
-  streamExportedSources: Set<string> = new Set();
+  /** Whether this program's `@stream` ring runtime preamble, module-level registry
+   *  and single `stream_dispatch` export have been emitted. PROGRAM-wide, not per
+   *  source: the preamble declares `@global` classes, so a second copy inside one
+   *  artifact is a duplicate-identifier error. A project may split its `@stream`
+   *  boxes over several files, and each class still registers itself, so the guard
+   *  has to key on the program (exactly one Parser), not on the file path. */
+  streamRuntimeEmitted: bool = false;
   /** Monotonic id handed to each `@ratelimit` route so the edge can key one
    *  shared limiter per route. Program-wide (one Parser per program), assigned
    *  deterministically in route declaration order. */
@@ -731,7 +734,7 @@ export class Parser extends DiagnosticEmitter {
     this.backlog = [];
     this.seenlog.clear();
     this.donelog.clear();
-    this.streamExportedSources.clear();
+    this.streamRuntimeEmitted = false;
     this.dependees.clear();
     this.restImportedSources.clear();
     this.rpcImportedSources.clear();
@@ -3347,8 +3350,12 @@ export class Parser extends DiagnosticEmitter {
    * model, but SELF-CONTAINED (no external runtime import): like
    * `injectDaemonHandler`, a top-level export referencing an unresolved runtime
    * import would be a hard compile error (TS6054), so the registry + the export
-   * are plain module-level code emitted once (guarded by `streamExportedSources`,
-   * exactly as `injectRestController` guards its one-per-source import).
+   * are plain module-level code emitted once per PROGRAM (guarded by
+   * `streamRuntimeEmitted`). A project may spread its `@stream` boxes over several
+   * source files, and the preamble declares `@global` classes that must never be
+   * redeclared into the same artifact; unlike `injectRestController`'s per-source
+   * `import`, which is legal to repeat, a second copy of a `@global` declaration
+   * is a TS2300 duplicate identifier.
    *
    * The `event_kind` ids are exactly the `toilstream.catalog` hook bitmask bits
    * plus one (connect=1 <-> bit0, message=2 <-> bit1, close=3 <-> bit2,
@@ -3466,33 +3473,46 @@ export class Parser extends DiagnosticEmitter {
     this.injectClassMember(declaration,
       "__streamDispatch(__ev: i32): i64{" + dispatchArms + "return 0;}");
 
-    let userSource = declaration.range.source;
-    let key = userSource.normalizedPath;
-
-    // Emit the module-level registry + the single `stream_dispatch` export ONCE
-    // per source (a project may declare several `@stream` classes; the export is
-    // emitted exactly once, like `injectRestController`'s one-per-source import).
-    // The registry is an Array of dispatch thunks; the export selects the active
-    // entry (host/ring-owned selection, default 0) and routes by `event_kind`.
-    if (!this.streamExportedSources.has(key)) {
-      this.streamExportedSources.add(key);
+    // Emit the ring runtime + module-level registry + the single `stream_dispatch`
+    // export ONCE PER PROGRAM, not once per source. The preamble declares `@global`
+    // classes, and a program may spread its `@stream` boxes over several files: a
+    // second injection would redeclare those globals in the same artifact (TS2300).
+    // The registry is an Array of dispatch thunks; the export routes by `event_kind`
+    // on the entry the host selected with `stream_set_active` (default 0, so a host
+    // that never selects behaves exactly as a single-`@stream` project does today).
+    if (!this.streamRuntimeEmitted) {
+      this.streamRuntimeEmitted = true;
       // The ingress + egress ring runtime + the raw `StreamPacket` reader and `StreamOutbound`
       // encoder (spec 05 sections 5-6), injected once; see `streamRuntimeSource` for the ABI.
       this.injectTopLevelStatements(declaration, this.streamRuntimeSource());
+      // `@global`: every `@stream` FILE registers its thunk into this one array, so the
+      // registry has to be program-visible. The declaring file is the first `@stream`
+      // source parsed, hence the first to run its start code, so its `= []` initializer
+      // precedes every later file's `push`.
       this.injectTopLevelStatements(declaration,
         "// @ts-ignore: injected stream registry + entry (spec 03 section 5.1)\n" +
-        "let __toilStreamHandlers: Array<(__ev: i32) => i64> = [];\n");
-      this.injectTopLevelStatements(declaration,
-        "let __toilStreamActive: i32 = 0;\n");
-      this.injectTopLevelStatements(declaration,
-        "export function stream_dispatch(__event_kind: i32, __stream_id_lo: i32, __stream_id_hi: i32): i64{" +
-        // Publish the 64-bit connection id (reassembled from its two i32 halves, unsigned) into the
-        // global the active box's StreamPacket reads for `connectionId`, then route by event_kind on
-        // the selected stream (tolerating any (lo, hi) without trapping).
-        "__toilStreamConnId = (<u64>(<u32>__stream_id_hi) << 32) | <u64>(<u32>__stream_id_lo);" +
-        "let __i = __toilStreamActive;" +
-        "if (__i < 0 || __i >= __toilStreamHandlers.length) return 0;" +
-        "return __toilStreamHandlers[__i](__event_kind);}\n");
+        "@global let __toilStreamHandlers: Array<(__ev: i32) => i64> = [];\n");
+                this.injectTopLevelStatements(declaration,
+          "let __toilStreamActive: i32 = 0;\n");
+        // Box selection for the host. With several `@stream` classes registered in one
+        // artifact, the host calls this with the connecting route's `toilstream.catalog`
+        // `stream_index` before dispatching, so each route reaches its own box instead of
+        // every connection landing on handler 0. Additive by design: a host that never
+        // calls it keeps the historical index-0 behavior, so an existing edge runs a
+        // newly built artifact unchanged. The dispatcher bounds-checks the index, so a
+        // stale or out-of-range selection is a no-op success rather than a trap.
+        this.injectTopLevelStatements(declaration,
+          "// @ts-ignore: injected stream box selection (spec 03 section 5.1)\n" +
+          "export function stream_set_active(__i: i32): void { __toilStreamActive = __i; }\n");
+        this.injectTopLevelStatements(declaration,
+          "export function stream_dispatch(__event_kind: i32, __stream_id_lo: i32, __stream_id_hi: i32): i64{" +
+          // Publish the 64-bit connection id (reassembled from its two i32 halves, unsigned) into the
+          // global the active box's StreamPacket reads for `connectionId`, then route by event_kind on
+          // the selected stream (tolerating any (lo, hi) without trapping).
+          "__toilStreamConnId = (<u64>(<u32>__stream_id_hi) << 32) | <u64>(<u32>__stream_id_lo);" +
+          "let __i = __toilStreamActive;" +
+          "if (__i < 0 || __i >= __toilStreamHandlers.length) return 0;" +
+          "return __toilStreamHandlers[__i](__event_kind);}\n");
     }
 
     // Per-class: a MODULE-SINGLETON instance (resident per-connection box,
