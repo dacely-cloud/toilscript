@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## [v0.1.68] - 2026-11-17
 
 - Merge AssemblyScript's current `main`, commit `b6bda05c29c9eb7d07d7f6cb2703508483b30493` (v0.28.20), including faster calendar calculations and the compact-imports feature flag. Preserve ToilScript's unsigned `Date.now()` host ABI and all fork compiler, standard library, metadata, and editor extensions.
 - Upgrade to stable Binaryen 132.0.0. Update C API feature flags, expression IDs, memory orders, atomic fences, and renamed glue functions. Keep atomic loads, stores, read-modify-write operations, compare-exchange, and fences sequentially consistent; validate all 604 inlined API constants and every glue export in the test suite.
 - Refresh root dependencies and loader transitive dependencies, and update rtrace plotting to d3 7.9.2 and jsdom 31.0.1 with a reproducible lockfile. The standalone rtrace plotting package now requires Node 22.22.2, 24.15.0, or 26 and later.
 - Retain TypeScript 6.0.3 for its JavaScript compiler API and the current typescript-eslint peer requirement. Continue testing generated editor declarations with the latest stable native TypeScript 7.0.2 alias.
+- Serialize dynamic `JSON` values and objects with a structural `toJSON()` method, without a base class or decorator. Preserve nested arrays, nullable objects, and scalar or string results from custom serializers.
 
 ## [v0.1.67] - 2026-10-28
 
