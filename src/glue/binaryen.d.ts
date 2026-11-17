@@ -36,6 +36,7 @@ export type GlobalRef = Ref;
 export type TagRef = Ref;
 export type TableRef = Ref;
 export type ElementSegmentRef = Ref;
+export type DataSegmentRef = Ref;
 export type RelooperRef = Ref;
 export type RelooperBlockRef = Ref;
 export type ExpressionRunnerRef = Ref;
@@ -217,7 +218,7 @@ export declare function _BinaryenMemoryGrowSetDelta(expr: ExpressionRef, delta: 
 
 export declare function _BinaryenLoad(module: ModuleRef, bytes: u32, signed: bool, offset: u32, align: u32, type: TypeRef, ptrExpr: ExpressionRef, memoryName: StringRef): ExpressionRef;
 export declare function _BinaryenLoadIsAtomic(expr: ExpressionRef): bool;
-export declare function _BinaryenLoadSetAtomic(expr: ExpressionRef, isAtomic: bool): void;
+export declare function _BinaryenLoadSetMemoryOrder(expr: ExpressionRef, order: MemoryOrder): void;
 export declare function _BinaryenLoadIsSigned(expr: ExpressionRef): bool;
 export declare function _BinaryenLoadSetSigned(expr: ExpressionRef, isSigned: bool): void;
 export declare function _BinaryenLoadGetOffset(expr: ExpressionRef): u32;
@@ -233,7 +234,7 @@ export declare function _BinaryenAtomicLoad(module: ModuleRef, bytes: Index, off
 
 export declare function _BinaryenStore(module: ModuleRef, bytes: u32, offset: u32, align: u32, ptrExpr: ExpressionRef, valueExpr: ExpressionRef, type: TypeRef, memoryName: StringRef): ExpressionRef;
 export declare function _BinaryenStoreIsAtomic(expr: ExpressionRef): bool;
-export declare function _BinaryenStoreSetAtomic(expr: ExpressionRef, isAtomic: bool): void;
+export declare function _BinaryenStoreSetMemoryOrder(expr: ExpressionRef, order: MemoryOrder): void;
 export declare function _BinaryenStoreGetBytes(expr: ExpressionRef): u32;
 export declare function _BinaryenStoreSetBytes(expr: ExpressionRef, bytes: u32): void;
 export declare function _BinaryenStoreGetOffset(expr: ExpressionRef): u32;
@@ -338,7 +339,7 @@ export declare function _BinaryenAtomicNotifySetPtr(expr: ExpressionRef, ptrExpr
 export declare function _BinaryenAtomicNotifyGetNotifyCount(expr: ExpressionRef): ExpressionRef;
 export declare function _BinaryenAtomicNotifySetNotifyCount(expr: ExpressionRef, notifyCountExpr: ExpressionRef): void;
 
-export declare function _BinaryenAtomicFence(module: ModuleRef, memoryName: StringRef): ExpressionRef;
+export declare function _BinaryenAtomicFence(module: ModuleRef, order: MemoryOrder): ExpressionRef;
 export declare function _BinaryenAtomicFenceGetOrder(expr: ExpressionRef): u8; // unused
 export declare function _BinaryenAtomicFenceSetOrder(expr: ExpressionRef, order: u8): void; // unused
 
@@ -523,7 +524,7 @@ export declare function _BinaryenThrowRemoveOperandAt(expr: ExpressionRef, index
 
 export declare function _BinaryenRethrow(module: ModuleRef, target: StringRef): ExpressionRef;
 export declare function _BinaryenRethrowGetTarget(expr: ExpressionRef): StringRef;
-export declare function _BinaryenRethrowSetDepth(expr: ExpressionRef, target: StringRef): void;
+export declare function _BinaryenRethrowSetTarget(expr: ExpressionRef, target: StringRef): void;
 
 export declare function _BinaryenTupleMake(module: ModuleRef, operandExprs: ArrayRef<ExpressionRef>, numOperands: Index): ExpressionRef;
 export declare function _BinaryenTupleMakeGetNumOperands(expr: ExpressionRef): Index;
@@ -847,10 +848,14 @@ export declare function _BinaryenGetElementSegment(module: ModuleRef, name: Stri
 export declare function _BinaryenGetElementSegmentByIndex(module: ModuleRef, index: Index): ElementSegmentRef;
 
 export declare function _BinaryenSetMemory(module: ModuleRef, initial: Index, maximum: Index, exportName: StringRef, segmentNames: ArrayRef<StringRef>, segmentDatas: ArrayRef<ArrayRef<u8>>, segmentPassive: ArrayRef<bool>, segmentOffsets: ArrayRef<usize>, segmentSizes: ArrayRef<u32>, numSegments: Index, shared: bool, memory64: bool, name: StringRef): void;
-export declare function _BinaryenGetNumMemorySegments(module: ModuleRef): Index;
-export declare function _BinaryenGetMemorySegmentByteOffset(module: ModuleRef, segmentName: StringRef): u32;
-export declare function _BinaryenGetMemorySegmentByteLength(module: ModuleRef, segmentName: StringRef): usize;
-export declare function _BinaryenCopyMemorySegmentData(module: ModuleRef, segmentName: StringRef, buffer: ArrayRef<u8>): void;
+export declare function _BinaryenGetNumDataSegments(module: ModuleRef): Index;
+export declare function _BinaryenGetDataSegment(module: ModuleRef, segmentName: StringRef): DataSegmentRef;
+export declare function _BinaryenGetDataSegmentByIndex(module: ModuleRef, index: Index): DataSegmentRef;
+export declare function _BinaryenDataSegmentGetName(segment: DataSegmentRef): StringRef;
+export declare function _BinaryenGetDataSegmentByteOffset(module: ModuleRef, segment: DataSegmentRef): u32;
+export declare function _BinaryenGetDataSegmentByteLength(segment: DataSegmentRef): usize;
+export declare function _BinaryenGetDataSegmentPassive(segment: DataSegmentRef): bool;
+export declare function _BinaryenCopyDataSegmentData(segment: DataSegmentRef, buffer: ArrayRef<u8>): void;
 export declare function _BinaryenAddDataSegment(module: ModuleRef, segmentName: StringRef, memoryName: StringRef, segmentPassive: bool, segmentOffset: ExpressionRef, segmentData: ArrayRef<u8>, segmentSize: Index): void;
 
 export declare function _BinaryenSetStart(module: ModuleRef, start: FunctionRef): void;
