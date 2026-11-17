@@ -25,21 +25,21 @@
   },
   "engineStrict": true,
   "dependencies": {
-    "binaryen": "130.0.0",
+    "binaryen": "132.0.0",
     "long": "^5.3.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.6",
     "as-float": "^1.0.1",
     "diff": "^9.0.0",
-    "esbuild": "^0.28.1",
-    "eslint": "^10.6.0",
-    "glob": "^13.0.6",
-    "globals": "^17.7.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.15.0",
+    "glob": "^14.0.6",
+    "globals": "^17.14.0",
     "typescript": "^6.0.3",
     "typescript7": "npm:typescript@7.0.2",
-    "typescript-eslint": "^8.63.0"
+    "typescript-eslint": "^8.73.0"
   },
   "type": "module",
   "exports": {
@@ -85,7 +85,7 @@
     "prepublishOnly": "node scripts/build",
     "watch": "node scripts/build --watch",
     "coverage": "npx c8 -- npm test",
-    "test": "npm run test:parser && npm run test:compiler -- --parallel && npm run test:browser && npm run test:toilconfig && npm run test:transform && npm run test:cli && npm run test:json && npm run test:data && npm run test:dbresolve && npm run test:dbstatic && npm run test:dbtypes && npm run test:routekinds && npm run test:auth-guards && npm run test:reported-bugs && npm run test:checked && npm run test:derive && npm run test:streams && npm run test:daemon && npm run test:dberror && npm run test:events && npm run test:uniquebatch && npm run test:membership && npm run test:sorted-index && npm run test:event-redaction && npm run test:shared && npm run test:unicode",
+    "test": "npm run test:binaryen && npm run test:parser && npm run test:compiler -- --parallel && npm run test:browser && npm run test:toilconfig && npm run test:transform && npm run test:cli && npm run test:json && npm run test:data && npm run test:dbresolve && npm run test:dbstatic && npm run test:dbtypes && npm run test:routekinds && npm run test:auth-guards && npm run test:reported-bugs && npm run test:checked && npm run test:derive && npm run test:streams && npm run test:daemon && npm run test:dberror && npm run test:events && npm run test:uniquebatch && npm run test:membership && npm run test:sorted-index && npm run test:event-redaction && npm run test:shared && npm run test:unicode",
     "test:parser": "node --enable-source-maps tests/parser",
     "test:compiler": "node --enable-source-maps --no-warnings tests/compiler",
     "test:browser": "node --enable-source-maps tests/browser",
@@ -123,7 +123,8 @@
     "bootstrap:rtraced": "node bin/toilscript --config src/toilconfig.json --target rtraced && node bin/toilscript --config src/toilconfig.json --target rtraced --wasm ./build/toilscript.rtraced.js",
     "test:shared": "node tests/shared/run.mjs",
     "gen:unicode": "node scripts/gen-unicode.mjs",
-    "test:unicode": "node tests/unicode/run.mjs"
+    "test:unicode": "node tests/unicode/run.mjs",
+    "test:binaryen": "node tests/binaryen/run.mjs"
   },
   "files": [
     "bin/",

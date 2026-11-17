@@ -217,11 +217,13 @@ export const enum FeatureFlags {
   FP16 = 262144 /* _BinaryenFeatureFP16 */,
   BulkMemoryOpt = 524288 /* _BinaryenFeatureBulkMemoryOpt */,
   CallIndirectOverlong = 1048576 /* _BinaryenFeatureCallIndirectOverlong */,
-  RelaxedAtomics = 4194304 /* _BinaryenFeatureRelaxedAtomics */,
+  AcquireReleaseAtomics = 4194304 /* _BinaryenFeatureAcquireReleaseAtomics */,
   CustomPageSizes = 8388608 /* _BinaryenFeatureCustomPageSizes */,
   Multibyte = 16777216 /* _BinaryenFeatureMultibyte */,
   WideArithmetic = 33554432 /* _BinaryenFeatureWideArithmetic */,
-  All = 67108863 /* _BinaryenFeatureAll */
+  CompactImports = 67108864 /* _BinaryenFeatureCompactImports */,
+  RelaxedAtomics = 134217728 /* _BinaryenFeatureRelaxedAtomics */,
+  All = 268435455 /* _BinaryenFeatureAll */
 }
 
 /** Binaryen expression id constants. See wasm-delegations.def in Binaryen. */
@@ -331,9 +333,8 @@ export const enum ExpressionId {
   ResumeThrow = 102 /* _BinaryenResumeThrowId */,
   StackSwitch = 103 /* _BinaryenStackSwitchId */,
   StructWait = 104 /* _BinaryenStructWaitId */,
-  StructNotify = 105 /* _BinaryenStructNotifyId */,
-  WideIntAddSub = 106 /* _BinaryenWideIntAddSubId */,
-  WideIntMul = 107 /* _BinaryenWideIntMulId */
+  WideIntAddSub = 105 /* _BinaryenWideIntAddSubId */,
+  WideIntMul = 106 /* _BinaryenWideIntMulId */
 }
 
 /** Binaryen external kind constants. */
@@ -349,10 +350,12 @@ export const enum ExternalKind {
 export const enum MemoryOrder {
   /** Non-atomic access. */
   Unordered = 0 /* _BinaryenMemoryOrderUnordered */,
-  /** Sequentially consistent atomic memory operation. */
-  SeqCst = 1 /* _BinaryenMemoryOrderSeqCst */,
+  /** Relaxed atomic memory operation. */
+  Relaxed = 1 /* _BinaryenMemoryOrderRelaxed */,
   /** Acquire/Release atomic memory operation; acquire for loads, release for stores. */
-  AcqRel = 2 /* _BinaryenMemoryOrderAcqRel */
+  AcqRel = 2 /* _BinaryenMemoryOrderAcqRel */,
+  /** Sequentially consistent atomic memory operation. */
+  SeqCst = 3 /* _BinaryenMemoryOrderSeqCst */
 }
 
 /** Binaryen unary operation constants. */
@@ -1713,8 +1716,8 @@ export class Module {
   }
 
   atomic_fence(name: string | null = null): ExpressionRef {
-    let cStr = this.allocStringCached(name);
-    return binaryen._BinaryenAtomicFence(this.ref, cStr);
+    // Keep the memory name argument for API compatibility. Fences apply to all memories.
+    return binaryen._BinaryenAtomicFence(this.ref, MemoryOrder.SeqCst);
   }
 
   // statements
