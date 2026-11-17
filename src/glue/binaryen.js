@@ -177,7 +177,7 @@ export const {
 
   _BinaryenLoad,
   _BinaryenLoadIsAtomic,
-  _BinaryenLoadSetAtomic,
+  _BinaryenLoadSetMemoryOrder,
   _BinaryenLoadIsSigned,
   _BinaryenLoadSetSigned,
   _BinaryenLoadGetOffset,
@@ -192,7 +192,7 @@ export const {
 
   _BinaryenStore,
   _BinaryenStoreIsAtomic,
-  _BinaryenStoreSetAtomic,
+  _BinaryenStoreSetMemoryOrder,
   _BinaryenStoreGetBytes,
   _BinaryenStoreSetBytes,
   _BinaryenStoreGetOffset,
@@ -479,7 +479,7 @@ export const {
 
   _BinaryenRethrow,
   _BinaryenRethrowGetTarget,
-  _BinaryenRethrowSetDepth,
+  _BinaryenRethrowSetTarget,
 
   _BinaryenTupleMake,
   _BinaryenTupleMakeGetNumOperands,
@@ -803,10 +803,14 @@ export const {
   _BinaryenGetElementSegmentByIndex,
 
   _BinaryenSetMemory,
-  _BinaryenGetNumMemorySegments,
-  _BinaryenGetMemorySegmentByteOffset,
-  _BinaryenGetMemorySegmentByteLength,
-  _BinaryenCopyMemorySegmentData,
+  _BinaryenGetNumDataSegments,
+  _BinaryenGetDataSegment,
+  _BinaryenGetDataSegmentByIndex,
+  _BinaryenDataSegmentGetName,
+  _BinaryenGetDataSegmentByteOffset,
+  _BinaryenGetDataSegmentByteLength,
+  _BinaryenGetDataSegmentPassive,
+  _BinaryenCopyDataSegmentData,
   _BinaryenAddDataSegment,
 
   _BinaryenSetStart,
