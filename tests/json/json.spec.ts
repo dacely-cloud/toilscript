@@ -69,6 +69,25 @@ function testStringify(): void {
     assert(JSON.stringify<Array<i32>>([1, 2, 3]) == "[1,2,3]");
     assert(JSON.stringify<Array<i32>>([]) == "[]");
     assert(JSON.stringify<Array<i32>>(changetype<Array<i32>>(0)) == "null");
+    const object = JSON.obj().set("name", JSON.of<string>("worker")).set("ready", JSON.of<bool>(true));
+    assert(JSON.stringify(object) == '{"name":"worker","ready":true}');
+    assert(JSON.stringify(JSON.parse('{"nested":[{"id":7},null]}')) == '{"nested":[{"id":7},null]}');
+    assert(JSON.stringify(new CustomJsonPayload()) == '{"answer":42}');
+    assert(JSON.stringify(new NumericJsonPayload()) == "42");
+    assert(JSON.stringify(new TextJsonPayload()) == '"escaped\\n\\\"value"');
+    assert(JSON.stringify<Array<CustomJsonPayload>>([new CustomJsonPayload()]) == '[{"answer":42}]');
+    assert(JSON.stringify<CustomJsonPayload | null>(null) == "null");
+    assert(JSON.stringify<JSON | null>(null) == "null");
+}
+
+class CustomJsonPayload {
+    toJSON(): JSON { return JSON.obj().set("answer", JSON.of<i32>(42)); }
+}
+class NumericJsonPayload {
+    toJSON(): i32 { return 42; }
+}
+class TextJsonPayload {
+    toJSON(): string { return 'escaped\n"value'; }
 }
 
 function testQuoteEscapes(): void {
