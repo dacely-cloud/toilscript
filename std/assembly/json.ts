@@ -223,6 +223,7 @@ export class JSON {
     }
 
     // ---- typed serializer: a typed value to JSON text, by compile-time type ----
+    // Objects opt in structurally with toJSON(); no base class or decorator is required.
     static stringify<T>(value: T): string {
         if (isBoolean<T>()) {
             return value ? "true" : "false";
@@ -244,7 +245,12 @@ export class JSON {
             for (let i = 0, n = arr.length; i < n; i++) parts[i] = JSON.stringify<valueof<T>>(arr[i]);
             return "[" + parts.join(",") + "]";
         }
-        ERROR("JSON.stringify: unsupported type, booleans, numbers, strings, null and arrays only");
+        if (isReference<T>()) {
+            if (changetype<usize>(value) == 0) return "null";
+            if (value instanceof JSON) return changetype<JSON>(value).toString();
+            if (isDefined(value.toJSON)) return JSON.stringify(value.toJSON());
+        }
+        ERROR("JSON.stringify: expected a scalar, array, JSON value or object with toJSON()");
         return unreachable();
     }
 
